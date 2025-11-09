@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "729539648621",
+    "project_id": "hair-house-salon-ef695",
+    "storage_bucket": "hair-house-salon-ef695.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:729539648621:android:b020a55f4f71f7940bf364",
+        "android_client_info": {
+          "package_name": "com.example.hxhmobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfuzPXCo5K5ECLjwV-2b6g6DATZVHEkr8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
