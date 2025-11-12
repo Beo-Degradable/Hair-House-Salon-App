@@ -1,11 +1,13 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ProfileHeader extends StatefulWidget {
   final String name;
@@ -45,12 +47,42 @@ class _ProfileHeaderState extends State<ProfileHeader> {
             .get();
         final data = snap.data();
         final b64 = data != null ? (data['avatarB64'] as String?) : null;
+        final remoteVersion = data != null
+            ? (data['avatarVersion'] as int?) ?? 0
+            : 0;
+        final localVersion = prefs.getInt('avatar_version') ?? 0;
         if (b64 != null && b64.isNotEmpty) {
           if (mounted) setState(() => _avatarB64 = b64);
+          // If remote version is newer or we don't have a stable local file, cache the bytes locally
+          if (remoteVersion > localVersion || (path == null || path.isEmpty)) {
+            try {
+              final bytes = base64Decode(b64);
+              final cachedPath = await _cacheAvatarBytes(bytes);
+              if (cachedPath != null) {
+                await prefs.setString('avatar_path', cachedPath);
+                if (mounted) setState(() => _avatarPath = cachedPath);
+              }
+              await prefs.setInt('avatar_version', remoteVersion);
+            } catch (_) {
+              // ignore cache errors
+            }
+          }
         }
       } catch (_) {
         // ignore
       }
+    }
+  }
+
+  Future<String?> _cacheAvatarBytes(Uint8List bytes) async {
+    if (kIsWeb) return null; // no file cache path on web here
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/avatar_cached.jpg');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -64,9 +96,17 @@ class _ProfileHeaderState extends State<ProfileHeader> {
       );
       if (picked != null) {
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('avatar_path', picked.path);
-        // Read bytes and store base64 to Firestore if signed in
+        // Read bytes
         final bytes = await picked.readAsBytes();
+        // Cache locally in a stable app directory (non-temp)
+        final cachedPath = await _cacheAvatarBytes(bytes);
+        if (cachedPath != null) {
+          await prefs.setString('avatar_path', cachedPath);
+        } else {
+          // Fallback to picked.path when cache unavailable (e.g., web)
+          await prefs.setString('avatar_path', picked.path);
+        }
+        // Prepare base64 thumbnail for sync (keep sizes modest via image_picker options)
         final b64 = base64Encode(bytes);
         final user = FirebaseAuth.instance.currentUser;
         if (user != null) {
@@ -77,12 +117,15 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                 .set({
                   'avatarB64': b64,
                   'updatedAt': FieldValue.serverTimestamp(),
+                  'avatarVersion': FieldValue.increment(1),
                 }, SetOptions(merge: true));
+            final currentLocalVersion = prefs.getInt('avatar_version') ?? 0;
+            await prefs.setInt('avatar_version', currentLocalVersion + 1);
           } catch (_) {}
         }
         if (!mounted) return;
         setState(() {
-          _avatarPath = picked.path;
+          _avatarPath = cachedPath ?? picked.path;
           _avatarB64 = b64;
         });
         Navigator.of(context).pop(); // Close dialog after picking
@@ -211,11 +254,6 @@ class _ProfileHeaderState extends State<ProfileHeader> {
                 ),
               ],
             ),
-          ),
-          IconButton(
-            tooltip: 'Change avatar',
-            icon: const Icon(Icons.edit_outlined),
-            onPressed: _showAvatarDialog,
           ),
         ],
       ),

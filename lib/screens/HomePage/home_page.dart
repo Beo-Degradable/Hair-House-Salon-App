@@ -4,10 +4,15 @@ import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../Products/products_page.dart';
+import '../ServicesPage/services_page.dart';
 import '../../widgets/bubble_background.dart';
 import '../StylistPage/stylist_details_page.dart';
 import '../AiStyles/ai_styles_page.dart';
 import '../Products/cart_page.dart';
+import '../Settings/settings_page.dart';
+import '../Notifications/notifications_page.dart';
+import '../Appointmentpage/booking_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -19,7 +24,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
   String _userName = 'Guest';
-  String? _selectedBranch;
   String _featuredCategory = 'All';
   late final AnimationController _fabCtrl;
 
@@ -30,25 +34,282 @@ class _HomePageState extends State<HomePage>
   List<String> _searchResults = [];
   bool _searchActive = false;
   OverlayEntry? _suggestionsOverlay;
+  // Removed unused fields (_bouncingId, _bounceCtrl, _servicesKey)
+
+  // Caches
+  List<Map<String, String>> _localServicesCache = [];
+  List<Map<String, String>> _localProductsCache = [];
 
   // Promo carousel (Firestore-backed Promotions collection)
   final PageController _promoController = PageController(viewportFraction: 0.9);
   int _promoIndex = 0;
+  // (moved _promoCount definition near top of class to group state vars)
+
+  // Helper: format price with Philippine peso sign and simple comma grouping
+  String _formatPeso(String raw) {
+    if (raw.isEmpty) return '₱—';
+    // Strip any non-numeric, keep digits, optional minus, and dot
+    final cleaned = raw.replaceAll(RegExp(r'[^0-9.\-]'), '');
+    final val = double.tryParse(cleaned);
+    if (val == null) return '₱—';
+    final bool isInt = val % 1 == 0;
+    String numberStr = isInt ? val.toInt().toString() : val.toStringAsFixed(2);
+    // Insert commas for thousands
+    String withCommas(String s) {
+      String integerPart = s;
+      String decimalPart = '';
+      final dotIndex = s.indexOf('.');
+      if (dotIndex != -1) {
+        integerPart = s.substring(0, dotIndex);
+        decimalPart = s.substring(dotIndex); // keep dot
+      }
+      final chars = integerPart.split('').reversed.toList();
+      final buf = StringBuffer();
+      for (int i = 0; i < chars.length; i++) {
+        if (i != 0 && i % 3 == 0) buf.write(',');
+        buf.write(chars[i]);
+      }
+      final grouped = buf.toString().split('').reversed.join();
+      return '$grouped$decimalPart';
+    }
+
+    return '₱${withCommas(numberStr)}';
+  }
+
+  // Primary featured services stream: active + order by sortOrder (requires composite index if combining where/orderBy)
+  Stream<QuerySnapshot<Map<String, dynamic>>> _servicesStreamPrimary() {
+    return FirebaseFirestore.instance
+        .collection('services')
+        .orderBy('sortOrder', descending: false)
+        .snapshots();
+  }
+
+  // Fallback: remove orderBy to avoid missing index errors while still filtering by active
+  Stream<QuerySnapshot<Map<String, dynamic>>> _servicesStreamFallback() {
+    return FirebaseFirestore.instance.collection('services').snapshots();
+  }
+
+  // Alternate flag fallback: some datasets may use `isActive` instead of `active`
+  Stream<QuerySnapshot<Map<String, dynamic>>> _servicesStreamFallbackAlt() {
+    return FirebaseFirestore.instance.collection('services').snapshots();
+  }
+
+  Widget _buildPromosPager(
+    BuildContext context,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    return SizedBox(
+      height: 160,
+      child: PageView.builder(
+        controller: _promoController,
+        itemCount: docs.length,
+        onPageChanged: (i) => setState(() => _promoIndex = i),
+        itemBuilder: (ctx, i) {
+          final data = docs[i].data();
+          final docId = docs[i].id;
+          final title = (data['title'] ?? '').toString();
+          final subtitle = (data['subtitle'] ?? '').toString();
+          final deepLinkServiceId = (data['deepLinkServiceId'] ?? '')
+              .toString();
+          return GestureDetector(
+            onTap: () {
+              final target = deepLinkServiceId.isNotEmpty
+                  ? deepLinkServiceId
+                  : docId;
+              _switchToServices(highlightedPromoId: target);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      if (subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          subtitle,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _servicesFallbackList(
+    List<Map<String, String>> Function(List<Map<String, String>>)
+    filterByBranch,
+  ) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _servicesStreamFallback(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          // Try alternative flag
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _servicesStreamFallbackAlt(),
+            builder: (context, altSnap) {
+              if (altSnap.connectionState == ConnectionState.waiting) {
+                return const SizedBox(
+                  height: 160,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              final docs = altSnap.data?.docs ?? [];
+              if (docs.isEmpty) {
+                return const Text('No featured services');
+              }
+              return _mapServicesDocs(filterByBranch, docs);
+            },
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const SizedBox(
+            height: 160,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          // Alt flag
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _servicesStreamFallbackAlt(),
+            builder: (context, altSnap) {
+              final altDocs = altSnap.data?.docs ?? [];
+              if (altDocs.isEmpty) return const Text('No featured services');
+              return _mapServicesDocs(filterByBranch, altDocs);
+            },
+          );
+        }
+        return _mapServicesDocs(filterByBranch, docs);
+      },
+    );
+  }
+
+  Widget _mapServicesDocs(
+    List<Map<String, String>> Function(List<Map<String, String>>)
+    filterByBranch,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final mapped = docs.map((d) {
+      final data = d.data();
+      // Prefer 'name', then 'title', then fallback
+      final name = (data['name'] ?? '').toString();
+      final title = (data['title'] ?? '').toString();
+      final displayName = name.isNotEmpty
+          ? name
+          : (title.isNotEmpty ? title : 'Service');
+      return {
+        'id': d.id,
+        'title': displayName,
+        'price': (data['price'] ?? '').toString(),
+        // desc intentionally omitted from UI
+        'desc': (data['description'] ?? data['desc'] ?? '').toString(),
+        'branch': (data['branch'] ?? '').toString(),
+        'category': (data['category'] ?? '').toString(),
+      };
+    }).toList();
+    final filtered = filterByBranch(mapped)
+        .where(
+          (s) =>
+              _featuredCategory == 'All' ||
+              (s['category'] ?? '') == _featuredCategory,
+        )
+        .toList();
+    if (filtered.isEmpty) return const Text('No featured services');
+    return SizedBox(
+      height: 160,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        scrollDirection: Axis.horizontal,
+        itemCount: filtered.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        itemBuilder: (ctx, i) {
+          final svc = filtered[i];
+          final title = svc['title']!;
+          final price = svc['price'] ?? '';
+          return SizedBox(
+            width: 220,
+            child: Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 4,
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleMedium),
+                    const Spacer(),
+                    Text(
+                      _formatPeso(price),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => BookingPage(
+                                serviceId: svc['id'],
+                                serviceTitle: svc['title'],
+                                servicePrice: svc['price'],
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text('Book Now'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // (Flash Offers section removed per request)
+
   int _promoCount = 0; // synced with live promotions count
   Timer? _promoTimer;
 
-  // Deprecated local services list replaced by Firestore stream (see _servicesStream)
-  List<Map<String, String>> _localServicesCache = [];
-
   // Firestore stylists cached for quick length checks
   List<Map<String, String>> _stylists = const [];
-
-  List<Map<String, String>> _promotedServices() {
-    // Firestore-backed: use cached services as a lightweight source for flash offers
-    // You can later link promos to specific service IDs by storing those IDs in _promoMap
-    if (_localServicesCache.isEmpty) return const [];
-    return _localServicesCache.take(6).toList();
-  }
+  // Removed legacy _promotedServices() – flash offers now stream from Firestore directly.
 
   // Removed unused _promoForService and _logout after UI refactor.
 
@@ -63,18 +324,25 @@ class _HomePageState extends State<HomePage>
   }
 
   void _onSearchChange() {
-    final q = _searchCtr.text.trim().toLowerCase();
-    setState(() {
-      if (q.isEmpty) {
+    try {
+      final q = _searchCtr.text.trim().toLowerCase();
+      setState(() {
+        if (q.isEmpty) {
+          _searchResults = [];
+          _removeSuggestionsOverlay();
+        } else {
+          _searchResults = _allSuggestions
+              .where((s) => s.toLowerCase().contains(q))
+              .toList();
+          _showSuggestionsOverlay();
+        }
+      });
+    } catch (e) {
+      setState(() {
         _searchResults = [];
         _removeSuggestionsOverlay();
-      } else {
-        _searchResults = _allSuggestions
-            .where((s) => s.toLowerCase().contains(q))
-            .toList();
-        _showSuggestionsOverlay();
-      }
-    });
+      });
+    }
   }
 
   void _closeSearch() {
@@ -111,10 +379,37 @@ class _HomePageState extends State<HomePage>
                         return ListTile(
                           leading: const Icon(Icons.search),
                           title: Text(t),
-                          onTap: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Selected: $t')),
+                          onTap: () async {
+                            final prefs = await SharedPreferences.getInstance();
+                            final isProduct = _localProductsCache.any(
+                              (p) => p['title'] == t,
                             );
+                            final isService = _localServicesCache.any(
+                              (s) => s['title'] == t,
+                            );
+                            if (isProduct) {
+                              await prefs.setInt(
+                                'last_nav_index',
+                                2,
+                              ); // Products tab
+                              await prefs.setString('highlighted_title', t);
+                              Navigator.of(
+                                context,
+                              ).pushReplacementNamed('/home');
+                            } else if (isService) {
+                              await prefs.setInt(
+                                'last_nav_index',
+                                1,
+                              ); // Services tab
+                              await prefs.setString('highlighted_promo_id', t);
+                              Navigator.of(
+                                context,
+                              ).pushReplacementNamed('/home');
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Selected: $t')),
+                              );
+                            }
                             _closeSearch();
                           },
                         );
@@ -174,32 +469,8 @@ class _HomePageState extends State<HomePage>
         curve: Curves.easeInOut,
       );
     });
-    // preload services titles for search suggestions
-    FirebaseFirestore.instance
-        .collection('services')
-        .where('active', isEqualTo: true)
-        .limit(50)
-        .get()
-        .then((snap) {
-          _localServicesCache = snap.docs.map((d) {
-            final data = d.data();
-            return {
-              'id': d.id,
-              'title': (data['title'] ?? 'Service').toString(),
-              'price': (data['price'] ?? '').toString(),
-              'desc': (data['description'] ?? data['desc'] ?? '').toString(),
-              'branch': (data['branch'] ?? '').toString(),
-              'category': (data['category'] ?? '').toString(),
-            };
-          }).toList();
-          if (mounted) {
-            setState(() {
-              _allSuggestions = _localServicesCache
-                  .map((e) => e['title']!)
-                  .toList();
-            });
-          }
-        });
+    _preloadServicesCache();
+    _preloadProductsCache();
 
     // subscribe to stylists
     FirebaseFirestore.instance
@@ -222,6 +493,137 @@ class _HomePageState extends State<HomePage>
               .toList();
           if (mounted) setState(() => _stylists = list);
         });
+  }
+
+  Future<void> _preloadServicesCache() async {
+    // Try primary query first
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('services')
+          .where('active', isEqualTo: true)
+          .limit(50)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        _assignLocalServicesFromSnap(snap);
+        return;
+      }
+      // Fallback 1: different boolean key commonly used
+      final snap2 = await FirebaseFirestore.instance
+          .collection('services')
+          .where('isActive', isEqualTo: true)
+          .limit(50)
+          .get();
+      if (snap2.docs.isNotEmpty) {
+        _assignLocalServicesFromSnap(snap2);
+        return;
+      }
+      // Fallback 2: no active filter (last resort)
+      final snap3 = await FirebaseFirestore.instance
+          .collection('services')
+          .limit(50)
+          .get();
+      _assignLocalServicesFromSnap(snap3);
+    } catch (e) {
+      // As a last resort, perform the simplest query to avoid index issues
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('services')
+            .limit(30)
+            .get();
+        _assignLocalServicesFromSnap(snap);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _preloadProductsCache() async {
+    // Try primary query first
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('products')
+          .where('active', isEqualTo: true)
+          .limit(50)
+          .get();
+      if (snap.docs.isNotEmpty) {
+        _assignLocalProductsFromSnap(snap);
+        return;
+      }
+      // Fallback 1: different boolean key commonly used
+      final snap2 = await FirebaseFirestore.instance
+          .collection('products')
+          .where('isActive', isEqualTo: true)
+          .limit(50)
+          .get();
+      if (snap2.docs.isNotEmpty) {
+        _assignLocalProductsFromSnap(snap2);
+        return;
+      }
+      // Fallback 2: no active filter (last resort)
+      final snap3 = await FirebaseFirestore.instance
+          .collection('products')
+          .limit(50)
+          .get();
+      _assignLocalProductsFromSnap(snap3);
+    } catch (e) {
+      // As a last resort, perform the simplest query to avoid index issues
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('products')
+            .limit(30)
+            .get();
+        _assignLocalProductsFromSnap(snap);
+      } catch (_) {}
+    }
+  }
+
+  void _assignLocalServicesFromSnap(QuerySnapshot<Map<String, dynamic>> snap) {
+    final list = snap.docs.map((d) {
+      final data = d.data();
+      final name = (data['name'] ?? '').toString();
+      final title = (data['title'] ?? '').toString();
+      final displayName = name.isNotEmpty
+          ? name
+          : (title.isNotEmpty ? title : 'Service');
+      return {
+        'id': d.id,
+        'title': displayName,
+        'price': (data['price'] ?? '').toString(),
+        'desc': (data['description'] ?? data['desc'] ?? '').toString(),
+        'branch': (data['branch'] ?? '').toString(),
+        'category': (data['category'] ?? '').toString(),
+      };
+    }).toList();
+    _localServicesCache = list;
+    _updateAllSuggestions();
+  }
+
+  void _assignLocalProductsFromSnap(QuerySnapshot<Map<String, dynamic>> snap) {
+    final list = snap.docs.map((d) {
+      final data = d.data();
+      final name = (data['name'] ?? '').toString();
+      final title = (data['title'] ?? '').toString();
+      final displayName = name.isNotEmpty
+          ? name
+          : (title.isNotEmpty ? title : 'Product');
+      return {
+        'id': d.id,
+        'title': displayName,
+        'price': (data['price'] ?? '').toString(),
+        'desc': (data['description'] ?? data['desc'] ?? '').toString(),
+        'branch': (data['branch'] ?? '').toString(),
+        'category': (data['category'] ?? '').toString(),
+      };
+    }).toList();
+    _localProductsCache = list;
+    _updateAllSuggestions();
+  }
+
+  void _updateAllSuggestions() {
+    final servicesTitles = _localServicesCache.map((e) => e['title']!).toList();
+    final productsTitles = _localProductsCache.map((e) => e['title']!).toList();
+    _allSuggestions = [...servicesTitles, ...productsTitles];
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -263,24 +665,7 @@ class _HomePageState extends State<HomePage>
 
   @override
   Widget build(BuildContext context) {
-    // Branch filter state (All by default)
-    final branches = const ['All', 'Vergara', 'Lawas', 'Lipa', 'Tanauan'];
-    _selectedBranch ??= 'All';
-
-    List<Map<String, String>> filterByBranch(List<Map<String, String>> list) {
-      if (_selectedBranch == null || _selectedBranch == 'All') return list;
-      return list.where((s) => (s['branch'] ?? '') == _selectedBranch).toList();
-    }
-
-    Stream<QuerySnapshot<Map<String, dynamic>>> _servicesStream() {
-      // Featured services: active, optionally filter by category later
-      return FirebaseFirestore.instance
-          .collection('services')
-          .where('active', isEqualTo: true)
-          .orderBy('sortOrder', descending: false)
-          .limit(30)
-          .snapshots();
-    }
+    // Flash Offers filter removed
 
     final authUser = FirebaseAuth.instance.currentUser;
     Stream<QuerySnapshot<Map<String, dynamic>>> _upcomingApptStream() {
@@ -395,16 +780,12 @@ class _HomePageState extends State<HomePage>
                                   ),
                                   IconButton(
                                     onPressed: () {
-                                      if (mounted)
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              'No new notifications',
-                                            ),
-                                          ),
-                                        );
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const NotificationsPage(),
+                                        ),
+                                      );
                                     },
                                     icon: const Icon(
                                       Icons.notifications,
@@ -413,14 +794,11 @@ class _HomePageState extends State<HomePage>
                                   ),
                                   IconButton(
                                     onPressed: () {
-                                      if (mounted)
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text('Open settings'),
-                                          ),
-                                        );
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) => const SettingsPage(),
+                                        ),
+                                      );
                                     },
                                     icon: const Icon(
                                       Icons.settings,
@@ -471,7 +849,8 @@ class _HomePageState extends State<HomePage>
                                           () => _searchActive = true,
                                         ),
                                         decoration: const InputDecoration(
-                                          hintText: 'Search services...',
+                                          hintText:
+                                              'Search services and products...',
                                           border: InputBorder.none,
                                           isDense: true,
                                         ),
@@ -498,11 +877,12 @@ class _HomePageState extends State<HomePage>
                     ),
                   ),
 
-                  // Promo carousel (live Promotions collection)
+                  // Promo carousel: 'promos' collection, only type == 'Promo'
                   StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
-                        .collection('Promotions')
+                        .collection('promos')
                         .where('active', isEqualTo: true)
+                        .where('type', isEqualTo: 'Promo')
                         .orderBy('sortOrder')
                         .snapshots(),
                     builder: (context, snapshot) {
@@ -520,205 +900,175 @@ class _HomePageState extends State<HomePage>
                           }
                         }
                       });
-                      if (docs.isEmpty) return const SizedBox();
-                      return SizedBox(
-                        height: 160,
-                        child: PageView.builder(
-                          controller: _promoController,
-                          itemCount: docs.length,
-                          onPageChanged: (i) => setState(() => _promoIndex = i),
-                          itemBuilder: (ctx, i) {
-                            final data = docs[i].data();
-                            final docId = docs[i].id;
-                            final title = (data['title'] ?? '').toString();
-                            final subtitle = (data['subtitle'] ?? '')
-                                .toString();
-                            final deepLinkServiceId =
-                                (data['deepLinkServiceId'] ?? '').toString();
-                            return GestureDetector(
-                              onTap: () {
-                                final target = deepLinkServiceId.isNotEmpty
-                                    ? deepLinkServiceId
-                                    : docId;
-                                _switchToServices(highlightedPromoId: target);
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 8,
-                                ),
-                                child: Card(
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  elevation: 4,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          title,
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.titleMedium,
-                                        ),
-                                        if (subtitle.isNotEmpty) ...[
-                                          const SizedBox(height: 8),
-                                          Text(
-                                            subtitle,
-                                            style: Theme.of(
-                                              context,
-                                            ).textTheme.bodyMedium,
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      );
+                      if (docs.isEmpty) return const SizedBox(height: 0);
+                      return _buildPromosPager(context, docs);
                     },
                   ),
                   const SizedBox(height: 18),
-
-                  // Flash Offers
-                  if (_promotedServices().isNotEmpty)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Text(
-                            'Flash Offers',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                        // Branch filter chips
-                        SizedBox(
-                          height: 38,
-                          child: ListView.separated(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            scrollDirection: Axis.horizontal,
-                            itemCount: branches.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(width: 8),
-                            itemBuilder: (_, i) {
-                              final b = branches[i];
-                              final selected = _selectedBranch == b;
-                              return ChoiceChip(
-                                label: Text(
-                                  b == 'All'
-                                      ? 'All Branches'
-                                      : b.replaceAll(' Branch', ''),
-                                ),
-                                selected: selected,
-                                onSelected: (_) =>
-                                    setState(() => _selectedBranch = b),
-                              );
-                            },
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        // Branch-specific flash offers; guarantee content per-branch with a graceful fallback
-                        (() {
-                          var branchFlash = filterByBranch(_promotedServices());
-                          // Fallback: if a specific branch has no promos defined, surface top services from that branch as temporary flash
-                          if ((_selectedBranch != null &&
-                                  _selectedBranch != 'All') &&
-                              branchFlash.isEmpty) {
-                            branchFlash = _localServicesCache
-                                .where((s) => s['branch'] == _selectedBranch)
-                                .take(3)
-                                .toList();
-                          }
-                          return SizedBox(
-                            height: 120,
+                  // Flash Offers (heading only)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Flash Offers',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  // Flash Offers Firestore section
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('promotions')
+                        .where('type', isEqualTo: 'Flash Offers')
+                        .where('status', isEqualTo: 'active')
+                        .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 160,
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      final docs = snapshot.data?.docs ?? [];
+                      if (docs.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16.0),
+                          child: Text('No flash offers available'),
+                        );
+                      }
+                      // DEBUG: Show raw Firestore documents
+                      return Column(
+                        children: [
+                          SizedBox(
+                            height: 160,
                             child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                               ),
-                              scrollDirection: Axis.horizontal,
-                              itemCount: branchFlash.length,
+                              itemCount: docs.length,
                               separatorBuilder: (_, __) =>
-                                  const SizedBox(width: 8),
+                                  const SizedBox(width: 12),
                               itemBuilder: (ctx, i) {
-                                final svc = branchFlash[i];
-                                final title =
-                                    svc['title']!; // removed unused id
-                                return GestureDetector(
-                                  onTap: () async {
-                                    // switch to Services tab (keeps navbar visible)
-                                    await _switchToServices();
-                                  },
-                                  child: SizedBox(
-                                    width: 220,
-                                    child: Card(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
+                                final data = docs[i].data();
+                                final title = (data['title'] ?? '').toString();
+                                final subtitle = (data['subtitle'] ?? '')
+                                    .toString();
+                                final startDate = data['startDate'];
+                                final endDate = data['endDate'];
+                                String dateStr = '';
+                                if (startDate != null && endDate != null) {
+                                  DateTime? start, end;
+                                  if (startDate is Timestamp)
+                                    start = startDate.toDate();
+                                  if (endDate is Timestamp)
+                                    end = endDate.toDate();
+                                  if (start != null && end != null) {
+                                    dateStr =
+                                        'From ${start.month}/${start.day}/${start.year} to ${end.month}/${end.day}/${end.year}';
+                                  }
+                                }
+                                final linkedServiceId =
+                                    (data['deepLinkServiceId'] ??
+                                            data['serviceId'] ??
+                                            data['targetServiceId'] ??
+                                            '')
+                                        .toString();
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(12),
+                                  onTap: () {
+                                    if (linkedServiceId.isEmpty) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'This offer is not linked to a bookable service.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => BookingPage(
+                                          serviceId: linkedServiceId,
+                                          serviceTitle: title,
+                                          servicePrice: (data['price'] ?? '')
+                                              .toString(),
+                                        ),
                                       ),
-                                      elevation: 4,
-                                      child: Padding(
-                                        padding: const EdgeInsets.all(12.0),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              title,
-                                              style: Theme.of(
-                                                context,
-                                              ).textTheme.titleMedium,
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Row(
-                                              children: [
-                                                Container(
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                        horizontal: 8,
-                                                        vertical: 4,
-                                                      ),
-                                                  decoration: BoxDecoration(
-                                                    color: Theme.of(
-                                                      context,
-                                                    ).colorScheme.primary,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                          8,
-                                                        ),
-                                                  ),
-                                                  child: const Text(
-                                                    'FLASH',
-                                                    style: TextStyle(
-                                                      color: Colors.white,
-                                                      fontSize: 12,
-                                                    ),
+                                    );
+                                  },
+                                  child: Card(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: const Color(0xFFB8860B),
+                                        width: 3,
+                                      ),
+                                    ),
+                                    elevation: 6,
+                                    child: Container(
+                                      width: 220,
+                                      padding: const EdgeInsets.all(14),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: const Color(0xFFB8860B),
+                                          width: 3,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            title,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: const Color(
+                                                    0xFFB8860B,
                                                   ),
                                                 ),
-                                                const SizedBox(width: 8),
-                                                const Text('20% OFF'),
-                                              ],
+                                          ),
+                                          if (subtitle.isNotEmpty) ...[
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              subtitle,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodyMedium,
                                             ),
                                           ],
-                                        ),
+                                          const Spacer(),
+                                          if (dateStr.isNotEmpty)
+                                            Text(
+                                              dateStr,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodySmall,
+                                            ),
+                                        ],
                                       ),
                                     ),
                                   ),
                                 );
                               },
                             ),
-                          );
-                        })(),
-                        const SizedBox(height: 18),
-                      ],
-                    ),
+                          ),
+                          // Raw debug output
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 18),
 
                   // Upcoming Appointment Alert (single card)
                   StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -804,9 +1154,20 @@ class _HomePageState extends State<HomePage>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Featured Services',
-                          style: Theme.of(context).textTheme.titleMedium,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Featured Services',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            TextButton(
+                              onPressed: () async {
+                                await _switchToServices();
+                              },
+                              child: const Text('See More'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 8),
                         // Featured category filter chips (independent of branch)
@@ -837,8 +1198,9 @@ class _HomePageState extends State<HomePage>
                           ),
                         ),
                         const SizedBox(height: 12),
+                        // Featured services with resilient fallbacks
                         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _servicesStream(),
+                          stream: _servicesStreamPrimary(),
                           builder: (context, snapshot) {
                             if (snapshot.connectionState ==
                                 ConnectionState.waiting) {
@@ -850,9 +1212,15 @@ class _HomePageState extends State<HomePage>
                               );
                             }
                             if (snapshot.hasError) {
-                              return const Text('Failed to load services');
+                              // Fallback without orderBy (likely missing index)
+                              // Do not branch-filter featured services
+                              return _servicesFallbackList((l) => l);
                             }
                             final docs = snapshot.data?.docs ?? [];
+                            if (docs.isEmpty) {
+                              // Try a simpler stream if primary returns nothing
+                              return _servicesFallbackList((l) => l);
+                            }
                             final mapped = docs.map((d) {
                               final data = d.data();
                               return {
@@ -860,6 +1228,7 @@ class _HomePageState extends State<HomePage>
                                 'title': (data['title'] ?? 'Service')
                                     .toString(),
                                 'price': (data['price'] ?? '').toString(),
+                                // desc intentionally omitted from UI
                                 'desc':
                                     (data['description'] ?? data['desc'] ?? '')
                                         .toString(),
@@ -867,14 +1236,13 @@ class _HomePageState extends State<HomePage>
                                 'category': (data['category'] ?? '').toString(),
                               };
                             }).toList();
-                            final filtered = filterByBranch(mapped)
+                            final filtered = mapped
                                 .where(
                                   (s) =>
                                       _featuredCategory == 'All' ||
                                       (s['category'] ?? '') ==
                                           _featuredCategory,
                                 )
-                                .take(10)
                                 .toList();
                             if (filtered.isEmpty) {
                               return const Text('No featured services');
@@ -893,7 +1261,6 @@ class _HomePageState extends State<HomePage>
                                   final svc = filtered[i];
                                   final title = svc['title']!;
                                   final price = svc['price'] ?? '';
-                                  final desc = svc['desc'] ?? '';
                                   return GestureDetector(
                                     onTap: () async {
                                       await _switchToServices();
@@ -920,33 +1287,16 @@ class _HomePageState extends State<HomePage>
                                                   context,
                                                 ).textTheme.titleMedium,
                                               ),
-                                              const SizedBox(height: 6),
-                                              Text(
-                                                desc,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.bodySmall,
-                                              ),
                                               const Spacer(),
-                                              Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceBetween,
-                                                children: [
-                                                  Text(
-                                                    price,
-                                                    style: const TextStyle(
+                                              Text(
+                                                _formatPeso(price),
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleMedium
+                                                    ?.copyWith(
                                                       fontWeight:
                                                           FontWeight.bold,
                                                     ),
-                                                  ),
-                                                  Icon(
-                                                    Icons.chevron_right,
-                                                    color: Theme.of(
-                                                      context,
-                                                    ).colorScheme.onSurface,
-                                                  ),
-                                                ],
                                               ),
                                             ],
                                           ),
@@ -976,7 +1326,7 @@ class _HomePageState extends State<HomePage>
                         ),
                         const SizedBox(height: 12),
                         SizedBox(
-                          height: 120,
+                          height: 160,
                           child: _stylists.isEmpty
                               ? const Center(child: Text('No stylists'))
                               : ListView.separated(
@@ -994,34 +1344,55 @@ class _HomePageState extends State<HomePage>
                                         Navigator.of(context).push(
                                           MaterialPageRoute(
                                             builder: (_) => StylistDetailsPage(
+                                              userId: stylist['id'],
                                               stylist: stylist,
                                             ),
                                           ),
                                         );
                                       },
-                                      child: Column(
-                                        children: [
-                                          Hero(
-                                            tag: 'stylist_${stylist['id']}',
-                                            child: const CircleAvatar(
-                                              radius: 40,
-                                              child: Icon(
-                                                Icons.person,
-                                                size: 40,
+                                      child: Container(
+                                        width: 120,
+                                        height: 160,
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 8,
+                                          horizontal: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.black,
+                                          border: Border.all(
+                                            color: const Color(0xFFB8860B),
+                                            width: 2,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.start,
+                                          children: [
+                                            Hero(
+                                              tag: 'stylist_${stylist['id']}',
+                                              child: CircleAvatar(
+                                                radius: 40,
+                                                child: Icon(
+                                                  Icons.person,
+                                                  size: 40,
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          SizedBox(
-                                            width: 90,
-                                            child: Text(
+                                            const SizedBox(height: 8),
+                                            Text(
                                               stylist['name']!,
                                               textAlign: TextAlign.center,
                                               overflow: TextOverflow.ellipsis,
                                               maxLines: 2,
+                                              style: Theme.of(
+                                                context,
+                                              ).textTheme.bodyMedium,
                                             ),
-                                          ),
-                                        ],
+                                          ],
+                                        ),
                                       ),
                                     );
                                   },
@@ -1034,18 +1405,6 @@ class _HomePageState extends State<HomePage>
                 ],
               ),
             ),
-
-            // Suggestions overlay
-            if (_searchActive && _searchCtr.text.trim().isNotEmpty)
-              Positioned(
-                top:
-                    MediaQuery.of(context).padding.top +
-                    MediaQuery.of(context).size.height * 0.28 -
-                    20,
-                left: 16,
-                right: 16,
-                child: _buildSuggestionsCard(),
-              ),
           ],
         ),
       ),

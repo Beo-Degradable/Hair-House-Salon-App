@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:hxhmobile/screens/Products/checkout_page.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:hxhmobile/utils/currency.dart';
 
 class CartPage extends StatefulWidget {
   const CartPage({super.key});
@@ -44,10 +45,11 @@ class _CartPageState extends State<CartPage> {
     final user = FirebaseAuth.instance.currentUser;
     Stream<QuerySnapshot<Map<String, dynamic>>> cartStream() {
       if (user == null) return const Stream.empty();
+      // Avoid composite index requirement by skipping server-side orderBy;
+      // we'll sort by addedAt on the client.
       return FirebaseFirestore.instance
           .collection('cart')
           .where('userUid', isEqualTo: user.uid)
-          .orderBy('addedAt', descending: true)
           .snapshots();
     }
 
@@ -118,78 +120,124 @@ class _CartPageState extends State<CartPage> {
                 if (snapshot.hasError) {
                   return const Center(child: Text('Failed to load cart'));
                 }
-                final docs = snapshot.data?.docs ?? [];
+                var docs = snapshot.data?.docs ?? [];
+                // Sort by addedAt desc if present
+                docs.sort((a, b) {
+                  final ta = a.data()['addedAt'];
+                  final tb = b.data()['addedAt'];
+                  final da = ta is Timestamp
+                      ? ta.toDate()
+                      : DateTime.fromMillisecondsSinceEpoch(0);
+                  final db = tb is Timestamp
+                      ? tb.toDate()
+                      : DateTime.fromMillisecondsSinceEpoch(0);
+                  return db.compareTo(da);
+                });
                 if (docs.isEmpty) {
                   return const Center(
                     child: Text('Your cart is empty for now.'),
                   );
                 }
-                return ListView.separated(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    final d = docs[i];
-                    final it = d.data();
-                    final docId = d.id;
-                    final selected = _selectedDocIds.contains(docId);
-                    final title = (it['title'] ?? 'Item').toString();
-                    final price = (it['price'] ?? '').toString();
-                    final quantity = (it['quantity'] is num)
-                        ? (it['quantity'] as num).toInt()
-                        : null;
-                    return InkWell(
-                      onLongPress: () => _enterSelection(docId),
-                      onTap: () {
-                        if (_selectionMode) _toggleSelected(docId);
-                      },
-                      child: ListTile(
-                        selected: selected,
-                        leading: const Icon(Icons.shopping_bag_outlined),
-                        title: Text(title),
-                        subtitle: quantity != null
-                            ? Text('Qty: $quantity')
-                            : null,
-                        trailing: _selectionMode
-                            ? Text(price)
-                            : Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(price),
-                                  const SizedBox(height: 4),
-                                  SizedBox(
-                                    height: 30,
-                                    child: OutlinedButton(
-                                      onPressed: () {
-                                        final item = <String, String>{
-                                          'id': (it['productId'] ?? docId)
-                                              .toString(),
-                                          'title': title,
-                                          'price': price,
-                                          'image': (it['image'] ?? '')
-                                              .toString(),
-                                        };
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                ProductsCheckoutPage(
-                                                  items: [item],
-                                                ),
+                return LayoutBuilder(
+                  builder: (ctx, constraints) {
+                    // Use a shrink-wrapped ListView inside a Scrollbar to avoid bottom overflow in very tight layouts.
+                    return Scrollbar(
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 80),
+                        // extra bottom padding so bottom bar doesn't cover last item
+                        itemCount: docs.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final d = docs[i];
+                          final it = d.data();
+                          final docId = d.id;
+                          final selected = _selectedDocIds.contains(docId);
+                          final title = (it['title'] ?? 'Item').toString();
+                          final rawPrice = (it['price'] ?? '').toString();
+                          final quantity = (it['quantity'] is num)
+                              ? (it['quantity'] as num).toInt()
+                              : null;
+                          return InkWell(
+                            onLongPress: () => _enterSelection(docId),
+                            onTap: () {
+                              if (_selectionMode) _toggleSelected(docId);
+                            },
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(minHeight: 60),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                selected: selected,
+                                leading: const Icon(
+                                  Icons.shopping_bag_outlined,
+                                ),
+                                title: Text(
+                                  title,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: quantity != null
+                                    ? Text('Qty: $quantity')
+                                    : null,
+                                trailing: _selectionMode
+                                    ? Text(
+                                        PhpCurrency.formatFromString(rawPrice),
+                                        overflow: TextOverflow.ellipsis,
+                                      )
+                                    : Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.end,
+                                        children: [
+                                          Text(
+                                            PhpCurrency.formatFromString(
+                                              rawPrice,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                        );
-                                      },
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 4,
-                                        ),
+                                          const SizedBox(height: 4),
+                                          SizedBox(
+                                            height: 26,
+                                            child: OutlinedButton(
+                                              onPressed: () {
+                                                final item = <String, String>{
+                                                  'id':
+                                                      (it['productId'] ?? docId)
+                                                          .toString(),
+                                                  'title': title,
+                                                  'price': rawPrice,
+                                                  'image': (it['image'] ?? '')
+                                                      .toString(),
+                                                };
+                                                Navigator.of(context).push(
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        ProductsCheckoutPage(
+                                                          items: [item],
+                                                        ),
+                                                  ),
+                                                );
+                                              },
+                                              style: OutlinedButton.styleFrom(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 2,
+                                                    ),
+                                              ),
+                                              child: const Text(
+                                                'Buy Now',
+                                                style: TextStyle(fontSize: 12),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      child: const Text('Buy Now'),
-                                    ),
-                                  ),
-                                ],
                               ),
+                            ),
+                          );
+                        },
                       ),
                     );
                   },
@@ -205,7 +253,18 @@ class _CartPageState extends State<CartPage> {
                     snapshot.hasError) {
                   return const SizedBox.shrink();
                 }
-                final docs = snapshot.data?.docs ?? [];
+                var docs = snapshot.data?.docs ?? [];
+                docs.sort((a, b) {
+                  final ta = a.data()['addedAt'];
+                  final tb = b.data()['addedAt'];
+                  final da = ta is Timestamp
+                      ? ta.toDate()
+                      : DateTime.fromMillisecondsSinceEpoch(0);
+                  final db = tb is Timestamp
+                      ? tb.toDate()
+                      : DateTime.fromMillisecondsSinceEpoch(0);
+                  return db.compareTo(da);
+                });
                 if (!_selectionMode ||
                     _selectedDocIds.isEmpty ||
                     docs.isEmpty) {
@@ -224,6 +283,7 @@ class _CartPageState extends State<CartPage> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Expanded(
                           child: Container(
@@ -239,47 +299,57 @@ class _CartPageState extends State<CartPage> {
                                 Text(
                                   'Items Selected (${_selectedDocIds.length})',
                                   style: Theme.of(context).textTheme.bodySmall,
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '₱$total',
+                                  PhpCurrency.formatInt(total),
                                   style: Theme.of(
                                     context,
                                   ).textTheme.titleMedium,
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
                                 ),
                               ],
                             ),
                           ),
                         ),
                         const SizedBox(width: 12),
-                        SizedBox(
-                          height: 52,
-                          child: ElevatedButton(
-                            onPressed: () {
-                              final selectedItems = selectedDocs.map((d) {
-                                final it = d.data();
-                                return <String, String>{
-                                  'id': (it['productId'] ?? d.id).toString(),
-                                  'title': (it['title'] ?? 'Product')
-                                      .toString(),
-                                  'price': (it['price'] ?? '').toString(),
-                                  'image': (it['image'] ?? '').toString(),
-                                };
-                              }).toList();
-                              Navigator.of(context)
-                                  .push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ProductsCheckoutPage(
-                                        items: selectedItems,
+                        Flexible(
+                          child: SizedBox(
+                            height: 48,
+                            child: ElevatedButton(
+                              onPressed: () {
+                                final selectedItems = selectedDocs.map((d) {
+                                  final it = d.data();
+                                  return <String, String>{
+                                    'id': (it['productId'] ?? d.id).toString(),
+                                    'title': (it['title'] ?? 'Product')
+                                        .toString(),
+                                    'price': (it['price'] ?? '').toString(),
+                                    'image': (it['image'] ?? '').toString(),
+                                  };
+                                }).toList();
+                                Navigator.of(context)
+                                    .push(
+                                      MaterialPageRoute(
+                                        builder: (_) => ProductsCheckoutPage(
+                                          items: selectedItems,
+                                        ),
                                       ),
-                                    ),
-                                  )
-                                  .then((_) {
-                                    if (!mounted) return;
-                                    _cancelSelection();
-                                  });
-                            },
-                            child: const Text('Buy Now'),
+                                    )
+                                    .then((_) {
+                                      if (!mounted) return;
+                                      _cancelSelection();
+                                    });
+                              },
+                              child: const Text(
+                                'Buy Now',
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            ),
                           ),
                         ),
                       ],

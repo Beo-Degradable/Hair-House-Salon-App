@@ -122,4 +122,30 @@ class AndroidNotificationService {
       matchDateTimeComponents: null,
     );
   }
+
+  /// Show an immediate high-priority notification on Android.
+  static Future<void> showNow({
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    await ensureInitialized();
+
+    const channelId = 'appointments_channel';
+    const channelName = 'Appointments';
+    const channelDesc = 'Reminders and confirmations for appointments';
+
+    final androidDetails = AndroidNotificationDetails(
+      channelId,
+      channelName,
+      channelDescription: channelDesc,
+      importance: Importance.max,
+      priority: Priority.high,
+      category: AndroidNotificationCategory.message,
+    );
+    final details = NotificationDetails(android: androidDetails);
+
+    final id = DateTime.now().millisecondsSinceEpoch & 0x7fffffff;
+    await _plugin.show(id, title, body, details, payload: payload);
+  }
 }

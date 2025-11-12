@@ -10,10 +10,10 @@ class HistoryPage extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     Stream<QuerySnapshot<Map<String, dynamic>>> historyStream() {
       if (user == null) return const Stream.empty();
+      // Remove server-side orderBy to avoid composite index requirement; we'll sort client-side.
       return FirebaseFirestore.instance
           .collection('history')
           .where('userUid', isEqualTo: user.uid)
-          .orderBy('timestamp', descending: true)
           .snapshots();
     }
 
@@ -73,7 +73,32 @@ class HistoryPage extends StatelessWidget {
                 if (snapshot.hasError) {
                   return const Center(child: Text('Failed to load history'));
                 }
-                final docs = snapshot.data?.docs ?? [];
+                final docs = (snapshot.data?.docs ?? [])
+                  ..sort((a, b) {
+                    final ta = a.data()['timestamp'];
+                    final tb = b.data()['timestamp'];
+                    DateTime da;
+                    DateTime db;
+                    if (ta is Timestamp) {
+                      da = ta.toDate();
+                    } else if (ta is String) {
+                      da =
+                          DateTime.tryParse(ta) ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                    } else {
+                      da = DateTime.fromMillisecondsSinceEpoch(0);
+                    }
+                    if (tb is Timestamp) {
+                      db = tb.toDate();
+                    } else if (tb is String) {
+                      db =
+                          DateTime.tryParse(tb) ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                    } else {
+                      db = DateTime.fromMillisecondsSinceEpoch(0);
+                    }
+                    return db.compareTo(da); // descending
+                  });
                 if (docs.isEmpty) {
                   return const Center(child: Text('No purchases yet'));
                 }
@@ -95,7 +120,7 @@ class HistoryPage extends StatelessWidget {
                     } else if (ts is String) {
                       timeStr = ts;
                     }
-                    final price = (it['price'] ?? it['amount'] ?? '')
+                    final priceRaw = (it['price'] ?? it['amount'] ?? '')
                         .toString();
                     final action = (it['action'] ?? '').toString();
                     final reason = (it['reason'] ?? '').toString();
@@ -108,7 +133,7 @@ class HistoryPage extends StatelessWidget {
                       leading: const Icon(Icons.receipt_long_outlined),
                       title: Text(title),
                       subtitle: Text(subtitle),
-                      trailing: Text(price),
+                      trailing: Text(priceRaw),
                     );
                   },
                 );

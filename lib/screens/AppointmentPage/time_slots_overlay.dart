@@ -1,9 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// Shows a bottom sheet with hourly time slots between 8:00 and 17:00 (inclusive start at 8)
+String _hourLabel(DateTime dt) {
+  final h = dt.hour;
+  final suffix = h >= 12 ? 'PM' : 'AM';
+  int hour12 = h % 12;
+  if (hour12 == 0) hour12 = 12;
+  return '$hour12 $suffix';
+}
+
+/// Shows a bottom sheet with hourly time slots between 8:00 AM and 5:00 PM (inclusive starts at 8 and 17)
 /// Returns the chosen DateTime (date + hour) or null if dismissed.
-/// Shows a bottom sheet with hourly time slots between 8:00 and 17:00 (inclusive start at 8)
+/// Shows a bottom sheet with hourly time slots between 8:00 AM and 5:00 PM (inclusive starts at 8 and 17)
 /// Returns the chosen DateTime (date + hour) or null if dismissed.
 /// If [stylistName] (and optionally [branch]) is provided, the list will reflect
 /// real-time availability by disabling booked slots from the `appointments` collection.
@@ -12,10 +20,11 @@ Future<DateTime?> showTimeSlotsDialog(
   DateTime forDate, {
   String? stylistName,
   String? branch,
+  int? requiredDurationMinutes,
 }) {
   final startHour = 8;
-  final endHour =
-      17; // last start hour is 16 for 8..16 (9 hours). Keep 17 as exclusive end.
+  // We want start times from 8 through 17 (5 PM) inclusive, so set exclusive end to 18
+  final endHour = 18; // produces slots for 8..17
 
   final slots = <DateTime>[];
   for (var h = startHour; h < endHour; h++) {
@@ -62,8 +71,8 @@ Future<DateTime?> showTimeSlotsDialog(
               ),
               const SizedBox(height: 8),
               if (applyRealtime)
-                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: query.snapshots(),
+                FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  future: query.get(),
                   builder: (context, snapshot) {
                     final docs = snapshot.data?.docs ?? [];
 
@@ -85,7 +94,22 @@ Future<DateTime?> showTimeSlotsDialog(
                             ? et
                             : (et is String ? DateTime.tryParse(et) : null);
                         if (start == null) continue;
-                        end ??= start.add(const Duration(hours: 1));
+                        if (end == null) {
+                          // derive end from duration fields if available
+                          final dynDur = data['duration'];
+                          final dynDurMin = data['durationMinutes'];
+                          int minutes = 60;
+                          if (dynDur is int) {
+                            minutes = dynDur;
+                          } else if (dynDurMin is int) {
+                            minutes = dynDurMin;
+                          } else if (dynDur is num) {
+                            minutes = dynDur.toInt();
+                          } else if (dynDurMin is num) {
+                            minutes = dynDurMin.toInt();
+                          }
+                          end = start.add(Duration(minutes: minutes));
+                        }
                         final slotEnd = slotStart.add(const Duration(hours: 1));
                         if (start.isBefore(slotEnd) && end.isAfter(slotStart)) {
                           return true;
@@ -98,12 +122,50 @@ Future<DateTime?> showTimeSlotsDialog(
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snapshot.hasError) {
-                      return Center(
-                        child: Text(
-                          'Failed to load availability',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                          ),
+                      // Graceful fallback: show slots but mark unknown availability
+                      debugPrint('Time slots error: ${snapshot.error}');
+                      return Flexible(
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.error_outline,
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Availability unavailable. Showing raw slots.',
+                                    style: TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Expanded(
+                              child: ListView.separated(
+                                shrinkWrap: true,
+                                itemCount: slots.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (ctx2, i) {
+                                  final s = slots[i];
+                                  final label = _hourLabel(s);
+                                  return ListTile(
+                                    title: Text(label),
+                                    // Can't confirm booking status; allow selection
+                                    onTap: () => Navigator.of(ctx2).pop(s),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                         ),
                       );
                     }
@@ -115,8 +177,56 @@ Future<DateTime?> showTimeSlotsDialog(
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (ctx2, i) {
                           final s = slots[i];
-                          final booked = slotIsBooked(s);
-                          final label = TimeOfDay.fromDateTime(s).format(ctx2);
+                          final int requiredMin =
+                              (requiredDurationMinutes ?? 60).clamp(
+                                15,
+                                12 * 60,
+                              );
+                          bool booked = slotIsBooked(s);
+                          if (!booked && requiredMin != 60) {
+                            // Check if the entire required duration fits without overlapping
+                            final sEnd = s.add(Duration(minutes: requiredMin));
+                            for (final d in docs) {
+                              final data = d.data();
+                              final st = data['startTime'];
+                              final et = data['endTime'];
+                              DateTime? start;
+                              DateTime? end;
+                              if (st is Timestamp) start = st.toDate();
+                              if (et is Timestamp) end = et.toDate();
+                              start ??= st is DateTime
+                                  ? st
+                                  : (st is String
+                                        ? DateTime.tryParse(st)
+                                        : null);
+                              end ??= et is DateTime
+                                  ? et
+                                  : (et is String
+                                        ? DateTime.tryParse(et)
+                                        : null);
+                              if (start == null) continue;
+                              if (end == null) {
+                                final dynDur = data['duration'];
+                                final dynDurMin = data['durationMinutes'];
+                                int minutes = 60;
+                                if (dynDur is int) {
+                                  minutes = dynDur;
+                                } else if (dynDurMin is int) {
+                                  minutes = dynDurMin;
+                                } else if (dynDur is num) {
+                                  minutes = dynDur.toInt();
+                                } else if (dynDurMin is num) {
+                                  minutes = dynDurMin.toInt();
+                                }
+                                end = start.add(Duration(minutes: minutes));
+                              }
+                              if (start.isBefore(sEnd) && end.isAfter(s)) {
+                                booked = true;
+                                break;
+                              }
+                            }
+                          }
+                          final label = _hourLabel(s);
                           return ListTile(
                             title: Text(label),
                             subtitle: booked ? const Text('Booked') : null,
@@ -138,7 +248,7 @@ Future<DateTime?> showTimeSlotsDialog(
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (ctx2, i) {
                       final s = slots[i];
-                      final label = TimeOfDay.fromDateTime(s).format(ctx2);
+                      final label = _hourLabel(s);
                       return ListTile(
                         title: Text(label),
                         onTap: () => Navigator.of(ctx2).pop(s),

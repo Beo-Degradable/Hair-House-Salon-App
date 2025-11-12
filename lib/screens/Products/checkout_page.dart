@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hxhmobile/utils/currency.dart';
 
 class ProductsCheckoutPage extends StatefulWidget {
   final List<Map<String, String>> items; // expects id, title, price, image?
@@ -215,7 +216,7 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  price,
+                                  PhpCurrency.formatFromString(price),
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                   ),
@@ -281,7 +282,7 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '₱$_totalPrice',
+                        PhpCurrency.formatInt(_totalPrice),
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ],

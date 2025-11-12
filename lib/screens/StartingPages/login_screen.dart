@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:hxhmobile/screens/StartingPages/forgot_password.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/bubble_background.dart';
 import '../../services/auth_service.dart';
+import 'forgot_password.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -22,12 +24,11 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLogin = true;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
+  bool _stayLoggedIn = true;
 
   String _passwordStrengthLabel = '';
   Color _passwordStrengthColor = Colors.red;
 
-  // Assumption: allow letters, digits, @ and dot in email to support typical addresses.
-  // The user requested no special characters besides '@'; to be practical we also allow '.'
   final _emailAllowed = RegExp(r'^[A-Za-z0-9@.]+$');
   final _nameAllowed = RegExp(r'^[A-Za-z\s]+$');
   final _passwordAllowed = RegExp(r'^[A-Za-z0-9]+$');
@@ -69,12 +70,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   int _computePasswordStrength(String s) {
-    // Only letters and numbers allowed. Score by length, uppercase and digits.
     var score = 0;
     if (s.length >= 8) score++;
     if (RegExp(r'[A-Z]').hasMatch(s)) score++;
     if (RegExp(r'[0-9]').hasMatch(s)) score++;
-    return score; // 0..3
+    return score;
   }
 
   String? _validateName(String? v) {
@@ -89,7 +89,6 @@ class _LoginScreenState extends State<LoginScreen> {
     final s = v.trim();
     if (!s.contains('@')) return 'Must contain @';
     if (!_emailAllowed.hasMatch(s)) return 'Invalid characters in email';
-    // basic placement check
     final parts = s.split('@');
     if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty)
       return 'Invalid email format';
@@ -103,7 +102,6 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_isLogin) {
       if (v.length < 6) return 'Password too short';
     } else {
-      // signup: require stronger
       if (_computePasswordStrength(v) < 3) return 'Password not strong enough';
     }
     return null;
@@ -136,10 +134,10 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
 
-      // Fetch profile doc and persist locally for quick header display
       final profile = await AuthService.instance.fetchProfile();
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('is_logged_in', true);
+      await prefs.setBool('is_logged_in', _stayLoggedIn);
+      await prefs.setBool('stay_logged_in', _stayLoggedIn);
       await prefs.setString('email', email);
       if (profile != null) {
         final name = (profile['name'] as String?)?.trim();
@@ -182,6 +180,17 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height;
+    precacheImage(const AssetImage('assets/LogoH.png'), context);
+    // Load stay logged in preference once (lazy init) if controllers are fresh
+    // This avoids async in initState rework; inexpensive read each build with guard.
+    if (_formKey.currentState == null) {
+      SharedPreferences.getInstance().then((prefs) {
+        final stay = prefs.getBool('stay_logged_in');
+        if (stay != null && stay != _stayLoggedIn && mounted) {
+          setState(() => _stayLoggedIn = stay);
+        }
+      });
+    }
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -197,7 +206,6 @@ class _LoginScreenState extends State<LoginScreen> {
           SingleChildScrollView(
             child: Column(
               children: [
-                // Rounded top container (top to ~1/4 of screen)
                 Container(
                   height: height * 0.25,
                   width: double.infinity,
@@ -212,7 +220,21 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const FlutterLogo(size: 64),
+                        Image.asset(
+                          'assets/LogoH.png',
+                          width: 80,
+                          height: 80,
+                          fit: BoxFit.contain,
+                          errorBuilder: (ctx, err, stack) {
+                            debugPrint(
+                              'LoginScreen: failed to load LogoH.png -> $err',
+                            );
+                            return const Icon(
+                              Icons.image_not_supported,
+                              size: 48,
+                            );
+                          },
+                        ),
                         const SizedBox(height: 12),
                         Text(
                           _isLogin ? 'Welcome Back' : 'Create an account',
@@ -231,10 +253,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 14),
-
-                // Form container (centered & narrower)
                 Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 520),
@@ -261,7 +280,6 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: Column(
                               children: [
                                 if (!_isLogin) ...[
-                                  // first name / last name side-by-side
                                   Row(
                                     children: [
                                       Expanded(
@@ -297,8 +315,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ),
                                   const SizedBox(height: 12),
                                 ],
-
-                                // email
                                 TextFormField(
                                   controller: _emailController,
                                   keyboardType: TextInputType.emailAddress,
@@ -313,8 +329,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                   ],
                                 ),
                                 const SizedBox(height: 12),
-
-                                // password
                                 TextFormField(
                                   controller: _passwordController,
                                   obscureText: _obscurePassword,
@@ -340,10 +354,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                     ),
                                   ],
                                 ),
-
                                 if (!_isLogin) ...[
                                   const SizedBox(height: 8),
-                                  // password strength
                                   if (_passwordStrengthLabel.isNotEmpty)
                                     Row(
                                       children: [
@@ -362,7 +374,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ],
                                     ),
                                   const SizedBox(height: 12),
-                                  // confirm password
                                   TextFormField(
                                     controller: _confirmController,
                                     obscureText: _obscureConfirm,
@@ -387,17 +398,46 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ),
                                     ],
                                   ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Checkbox(
+                                        value: _stayLoggedIn,
+                                        onChanged: (v) => setState(
+                                          () => _stayLoggedIn = v ?? true,
+                                        ),
+                                      ),
+                                      const Text('Stay logged in'),
+                                    ],
+                                  ),
                                 ] else ...[
                                   const SizedBox(height: 8),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton(
-                                      onPressed: () {},
-                                      child: const Text('Forgot password?'),
-                                    ),
+                                  // Login mode: stay logged in + forgot password in one row
+                                  Row(
+                                    children: [
+                                      Checkbox(
+                                        value: _stayLoggedIn,
+                                        onChanged: (v) => setState(
+                                          () => _stayLoggedIn = v ?? true,
+                                        ),
+                                      ),
+                                      const Text('Stay logged in'),
+                                      const Spacer(),
+                                      TextButton(
+                                        onPressed: () {
+                                          Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  ForgotPasswordPage(),
+                                            ),
+                                          );
+                                        },
+                                        child: const Text('Forgot password?'),
+                                      ),
+                                    ],
                                   ),
                                 ],
-
+                                const SizedBox(height: 16),
                                 const SizedBox(height: 16),
                                 SizedBox(
                                   width: double.infinity,
@@ -413,18 +453,15 @@ class _LoginScreenState extends State<LoginScreen> {
                                     ),
                                   ),
                                 ),
-                              ], // column children
-                            ), // Column
-                          ), // Form
-                        ), // Padding (inside Card)
-                      ), // Card
-                    ), // Padding (ConstrainedBox)
-                  ), // ConstrainedBox
-                ), // Center
-
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 12),
-
-                // Outside of container: toggle mode
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -445,7 +482,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 24),
               ],
             ),

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hxhmobile/screens/Profile/history_page.dart';
+import 'package:hxhmobile/services/auth_service.dart';
 
 class MyAccountPage extends StatefulWidget {
   const MyAccountPage({super.key});
@@ -439,25 +440,11 @@ class _MyAccountPageState extends State<MyAccountPage> {
             ElevatedButton(
               onPressed: () async {
                 if (!(_pwdFormKey.currentState?.validate() ?? false)) return;
-                final user = FirebaseAuth.instance.currentUser;
-                if (user == null || user.email == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Not signed in')),
-                  );
-                  return;
-                }
                 try {
-                  await _reauthenticate(
-                    user.email!,
-                    _currentPwdCtr.text.trim(),
+                  await AuthService.instance.changePassword(
+                    currentPassword: _currentPwdCtr.text.trim(),
+                    newPassword: _newPwdCtr.text.trim(),
                   );
-                  await user.updatePassword(_newPwdCtr.text.trim());
-                  await FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(user.uid)
-                      .set({
-                        'updatedAt': FieldValue.serverTimestamp(),
-                      }, SetOptions(merge: true));
                   if (!mounted) return;
                   setState(() {
                     _currentPwdCtr.clear();
@@ -473,6 +460,8 @@ class _MyAccountPageState extends State<MyAccountPage> {
                   if (e.code == 'wrong-password')
                     msg = 'Current password incorrect';
                   if (e.code == 'weak-password') msg = 'Weak password';
+                  if (e.code == 'requires-recent-login')
+                    msg = 'Please re-login and try again';
                   ScaffoldMessenger.of(
                     context,
                   ).showSnackBar(SnackBar(content: Text(msg)));

@@ -75,4 +75,43 @@ class AuthService {
     final snap = await _db.collection('users').doc(uid).get();
     return snap.data();
   }
+
+  /// Reauthenticates the current user using their email + current password, then updates
+  /// the password and records metadata in Firestore.
+  /// Throws [FirebaseAuthException] for wrong-password, weak-password, requires-recent-login, etc.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'no-current-user',
+        message: 'No authenticated user.',
+      );
+    }
+    final email = user.email;
+    if (email == null) {
+      throw FirebaseAuthException(
+        code: 'no-email',
+        message: 'User account has no email.',
+      );
+    }
+
+    // Reauthenticate
+    final cred = EmailAuthProvider.credential(
+      email: email,
+      password: currentPassword,
+    );
+    await user.reauthenticateWithCredential(cred);
+
+    // Update password
+    await user.updatePassword(newPassword);
+
+    // Persist metadata in Firestore
+    await _db.collection('users').doc(user.uid).set({
+      'updatedAt': FieldValue.serverTimestamp(),
+      'passwordUpdatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
 }

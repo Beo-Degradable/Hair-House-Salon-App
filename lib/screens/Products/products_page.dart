@@ -3,20 +3,91 @@ import 'package:hxhmobile/screens/Products/cart_page.dart';
 import 'package:hxhmobile/screens/Products/checkout_page.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:hxhmobile/utils/currency.dart';
+
+// Animation for highlight
+late AnimationController _highlightController;
+late Animation<double> _highlightScale;
+String? _activeHighlight;
 
 class ProductsPage extends StatefulWidget {
-  const ProductsPage({super.key});
+  final String? highlightedTitle;
+
+  const ProductsPage({super.key, this.highlightedTitle});
 
   @override
   State<ProductsPage> createState() => _ProductsPageState();
 }
 
-class _ProductsPageState extends State<ProductsPage> {
+class _ProductsPageState extends State<ProductsPage>
+    with TickerProviderStateMixin {
   // Firestore-backed products (fallback to empty list if stream not ready)
   List<Map<String, String>> _productsCache = const [];
 
   final Set<String> _selected = {};
   bool _selectionMode = false;
+
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    _highlightController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _highlightScale = Tween<double>(
+      begin: 1.0,
+      end: 1.15,
+    ).chain(CurveTween(curve: Curves.elasticOut)).animate(_highlightController);
+    if (widget.highlightedTitle != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToHighlighted();
+        setState(() {
+          _activeHighlight = widget.highlightedTitle;
+        });
+        _highlightController.forward();
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() {
+              _activeHighlight = null;
+            });
+            _highlightController.reverse();
+          }
+        });
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _highlightController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToHighlighted() {
+    final index = _productsCache.indexWhere(
+      (p) => p['title'] == widget.highlightedTitle,
+    );
+    if (index != -1) {
+      // Assuming GridView, calculate approximate position
+      final crossAxisCount = MediaQuery.of(context).size.width >= 900
+          ? 4
+          : MediaQuery.of(context).size.width >= 600
+          ? 3
+          : 2;
+      final row = index ~/ crossAxisCount;
+      final itemHeight = 200; // approximate item height
+      final offset = row * itemHeight;
+      _scrollController.animateTo(
+        offset.toDouble(),
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
 
   int _parsePrice(String? s) {
     if (s == null) return 0;
@@ -138,6 +209,7 @@ class _ProductsPageState extends State<ProductsPage> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const Text('Products'),
         actions: [
           if (_selectionMode)
@@ -146,24 +218,89 @@ class _ProductsPageState extends State<ProductsPage> {
               onPressed: _cancelSelection,
               icon: const Icon(Icons.close),
             ),
+          Builder(
+            builder: (ctx) {
+              final user = FirebaseAuth.instance.currentUser;
+              if (user == null) {
+                return IconButton(
+                  tooltip: 'My Cart',
+                  icon: const Icon(Icons.shopping_cart),
+                  onPressed: () {
+                    Navigator.of(
+                      context,
+                    ).push(MaterialPageRoute(builder: (_) => const CartPage()));
+                  },
+                );
+              }
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('cart')
+                    .where('userUid', isEqualTo: user.uid)
+                    .snapshots(),
+                builder: (context, snap) {
+                  final count = snap.data?.docs.length ?? 0;
+                  return IconButton(
+                    tooltip: 'My Cart',
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const CartPage()),
+                      );
+                    },
+                    icon: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        const Icon(Icons.shopping_cart),
+                        if (count > 0)
+                          Positioned(
+                            right: -2,
+                            top: -2,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.redAccent,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              constraints: const BoxConstraints(minWidth: 16),
+                              child: Text(
+                                count > 99 ? '99+' : '$count',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
         ],
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('products')
-            .where('active', isEqualTo: true)
-            .orderBy('sortOrder', descending: false)
-            .limit(60)
-            .snapshots(),
+        // Keep the query schema-agnostic: don't require fields like `active` or `sortOrder`.
+        stream: FirebaseFirestore.instance.collection('products').snapshots(),
         builder: (context, snapshot) {
           final dataDocs = snapshot.data?.docs ?? [];
           _productsCache = dataDocs.map((d) {
             final data = d.data();
             return {
               'id': d.id,
-              'title': (data['title'] ?? 'Product').toString(),
-              'price': (data['price'] ?? '').toString(),
-              'image': (data['imageUrl'] ?? '').toString(),
+              // Prefer collection-native fields, with safe fallbacks
+              'title': (data['title'] ?? data['name'] ?? 'Product').toString(),
+              // If `price` is missing, fall back to `cost`
+              'price': (data['price'] ?? data['cost'] ?? '').toString(),
+              'brand': (data['brand'] ?? '').toString(),
+              'category': (data['category'] ?? '').toString(),
+              'unit': (data['unit'] ?? '').toString(),
+              'quantity': (data['quantity'] ?? '').toString(),
+              'image': (data['image'] ?? data['imageUrl'] ?? '').toString(),
             };
           }).toList();
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -181,6 +318,7 @@ class _ProductsPageState extends State<ProductsPage> {
                   ? 3
                   : 2; // 2 on phones
               return GridView.builder(
+                controller: _scrollController,
                 padding: const EdgeInsets.all(12),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: crossAxisCount,
@@ -194,7 +332,11 @@ class _ProductsPageState extends State<ProductsPage> {
                   final id = p['id']!;
                   final title = p['title']!;
                   final price = p['price'] ?? '';
+                  final brand = p['brand'] ?? '';
+                  final unit = p['unit'] ?? '';
                   final selected = _selected.contains(id);
+                  final highlighted =
+                      _activeHighlight != null && title == _activeHighlight;
                   return InkWell(
                     onLongPress: () => _enterSelection(id),
                     onTap: () {
@@ -203,85 +345,116 @@ class _ProductsPageState extends State<ProductsPage> {
                       }
                     },
                     borderRadius: BorderRadius.circular(12),
-                    child: Card(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: selected
-                            ? BorderSide(color: cs.primary, width: 2)
-                            : BorderSide(color: Colors.transparent, width: 0),
-                      ),
-                      elevation: 3,
-                      child: Padding(
-                        padding: const EdgeInsets.all(10.0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: Container(
-                                height: 80,
-                                width: double.infinity,
-                                color: cs.surfaceContainerHighest.withValues(
-                                  alpha: 0.2,
-                                ),
-                                alignment: Alignment.center,
-                                child: Icon(
-                                  Icons.image,
-                                  color: cs.onSurface.withValues(alpha: 0.5),
-                                ),
-                              ),
+                    child: AnimatedBuilder(
+                      animation: _highlightController,
+                      builder: (context, child) {
+                        final scale = highlighted ? _highlightScale.value : 1.0;
+                        return Transform.scale(
+                          scale: scale,
+                          child: Card(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: selected
+                                  ? BorderSide(color: cs.primary, width: 2)
+                                  : highlighted
+                                  ? BorderSide(color: Colors.amber, width: 3)
+                                  : BorderSide(
+                                      color: Colors.transparent,
+                                      width: 0,
+                                    ),
                             ),
-                            const SizedBox(height: 8),
-                            Text(
-                              title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              price,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const Spacer(),
-                            Row(
-                              children: [
-                                FittedBox(
-                                  child: OutlinedButton(
-                                    onPressed: () => _addToCart(id),
-                                    style: OutlinedButton.styleFrom(
-                                      minimumSize: const Size(0, 36),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 8,
+                            elevation: 3,
+                            child: Padding(
+                              padding: const EdgeInsets.all(10.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: Container(
+                                      height: 80,
+                                      width: double.infinity,
+                                      color: cs.surfaceContainerHighest
+                                          .withValues(alpha: 0.2),
+                                      alignment: Alignment.center,
+                                      child: Icon(
+                                        Icons.image,
+                                        color: cs.onSurface.withValues(
+                                          alpha: 0.5,
+                                        ),
                                       ),
                                     ),
-                                    child: const Icon(
-                                      Icons.shopping_cart_outlined,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleSmall,
+                                  ),
+                                  if (brand.isNotEmpty || unit.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      [
+                                        brand,
+                                        unit,
+                                      ].where((e) => e.isNotEmpty).join(' • '),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    PhpCurrency.formatFromString(price),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                ),
-                                const Spacer(),
-                                FittedBox(
-                                  child: ElevatedButton(
-                                    onPressed: () => _buyNow(id),
-                                    style: ElevatedButton.styleFrom(
-                                      minimumSize: const Size(0, 36),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 8,
+                                  const Spacer(),
+                                  Row(
+                                    children: [
+                                      FittedBox(
+                                        child: OutlinedButton(
+                                          onPressed: () => _addToCart(id),
+                                          style: OutlinedButton.styleFrom(
+                                            minimumSize: const Size(0, 36),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.shopping_cart_outlined,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                    child: const Text('Buy Now'),
+                                      const Spacer(),
+                                      FittedBox(
+                                        child: ElevatedButton(
+                                          onPressed: () => _buyNow(id),
+                                          style: ElevatedButton.styleFrom(
+                                            minimumSize: const Size(0, 36),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
+                                          ),
+                                          child: const Text('Buy Now'),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
+                        );
+                      },
                     ),
                   );
                 },
@@ -315,7 +488,7 @@ class _ProductsPageState extends State<ProductsPage> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '₱${_selectedTotal.toString()}',
+                              PhpCurrency.formatInt(_selectedTotal),
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                           ],

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hxhmobile/screens/Profile/profile_header.dart';
 import 'package:hxhmobile/screens/Profile/my_account_page.dart';
 import 'package:hxhmobile/screens/Products/cart_page.dart';
@@ -119,6 +120,23 @@ class _ProfilePageState extends State<ProfilePage> {
                   icon: Icons.settings_outlined,
                   label: 'Settings',
                   page: const SettingsPage(),
+                ),
+                // Visual separation before logout (user request)
+                const Divider(height: 1, thickness: 1),
+                ListTile(
+                  leading: const Icon(Icons.logout),
+                  title: const Text('Log out'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('is_logged_in', false);
+                    try {
+                      await FirebaseAuth.instance.signOut();
+                    } catch (_) {}
+                    if (context.mounted) {
+                      Navigator.of(context).pushReplacementNamed('/login');
+                    }
+                  },
                 ),
               ],
             ),

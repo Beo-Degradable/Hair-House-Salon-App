@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'cancellation_reason_page.dart';
+import 'package:hxhmobile/utils/currency.dart';
 
 /// Displays the user's booked services from AppState.I.bookings
 /// Each booking shows date/time range, service title, branch, stylist and price.
@@ -16,11 +17,7 @@ class MyBookingPage extends StatelessWidget {
       body: user == null
           ? const Center(child: Text('Please sign in to view bookings'))
           : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('appointments')
-                  .where('clientUid', isEqualTo: user.uid)
-                  .orderBy('startTime', descending: true)
-                  .snapshots(),
+              stream: _userAppointmentsStream(user.uid, user.email),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -28,9 +25,21 @@ class MyBookingPage extends StatelessWidget {
                 if (snapshot.hasError) {
                   return const Center(child: Text('Failed to load bookings'));
                 }
-                final docs = snapshot.data?.docs ?? [];
+                // Sort docs by startTime descending on client
+                final docs = (snapshot.data?.docs ?? [])
+                  ..sort((a, b) {
+                    final sa = a.data()['startTime'];
+                    final sb = b.data()['startTime'];
+                    final da = sa is Timestamp
+                        ? sa.toDate()
+                        : DateTime.fromMillisecondsSinceEpoch(0);
+                    final db = sb is Timestamp
+                        ? sb.toDate()
+                        : DateTime.fromMillisecondsSinceEpoch(0);
+                    return db.compareTo(da);
+                  });
                 if (docs.isEmpty) {
-                  return const Center(child: Text('No bookings yet'));
+                  return const _EmptyBookings();
                 }
                 return ListView.separated(
                   padding: const EdgeInsets.all(12),
@@ -55,9 +64,11 @@ class MyBookingPage extends StatelessWidget {
                     final status = (data['status'] ?? '').toString();
                     String priceDisplay = '';
                     if (priceRaw is num) {
-                      priceDisplay = '₱${priceRaw.toString()}';
+                      priceDisplay = PhpCurrency.format(priceRaw);
                     } else if (priceRaw != null) {
-                      priceDisplay = priceRaw.toString();
+                      priceDisplay = PhpCurrency.formatFromString(
+                        priceRaw.toString(),
+                      );
                     }
                     final hoursUntil = start.difference(DateTime.now()).inHours;
                     final cancellable =
@@ -140,6 +151,20 @@ class MyBookingPage extends StatelessWidget {
     );
   }
 
+  // Primary stream: if clientUid indexed, direct query. If not found (e.g., legacy docs
+  // missing clientUid but have clientEmail), we fallback client-side in the builder.
+  Stream<QuerySnapshot<Map<String, dynamic>>> _userAppointmentsStream(
+    String uid,
+    String? email,
+  ) {
+    // Remove server-side orderBy to avoid composite index requirement.
+    // We'll sort client-side by startTime.
+    return FirebaseFirestore.instance
+        .collection('appointments')
+        .where('clientUid', isEqualTo: uid)
+        .snapshots();
+  }
+
   String _formatRange(DateTime start, DateTime end) {
     return '${_formatDate(start)}  ${_formatTime(start)} - ${_formatTime(end)}';
   }
@@ -167,5 +192,31 @@ class MyBookingPage extends StatelessWidget {
     final m2 = d.minute.toString().padLeft(2, '0');
     final ampm = d.hour < 12 ? 'AM' : 'PM';
     return '$h12:$m2 $ampm';
+  }
+}
+
+class _EmptyBookings extends StatelessWidget {
+  const _EmptyBookings();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.event_busy, size: 56, color: Colors.grey),
+          const SizedBox(height: 12),
+          Text(
+            'You have no appointments',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Book a service to see it listed here.',
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
   }
 }

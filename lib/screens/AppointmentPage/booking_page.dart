@@ -1,22 +1,33 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'time_slots_overlay.dart';
 import 'package:hxhmobile/screens/Profile/widgets/my_booking_page.dart';
+import 'package:hxhmobile/utils/currency.dart';
+import 'package:hxhmobile/services/android_notification_service.dart';
 
 class BookingPage extends StatefulWidget {
-  final String serviceId;
-  final String serviceTitle;
+  // Legacy single-service parameters (optional now)
+  final String? serviceId;
+  final String? serviceTitle;
   final String? servicePrice;
   final String? serviceDuration; // e.g. '1 hr 30 min' or '30 min'
+  // New: allow passing multiple services at once
+  // Each map expects keys: id, title, price, duration
+  final List<Map<String, String>>? initialServices;
+  // Pre-selected stylist name
+  final String? stylistName;
 
   const BookingPage({
     Key? key,
-    required this.serviceId,
-    required this.serviceTitle,
+    this.serviceId,
+    this.serviceTitle,
     this.servicePrice,
     this.serviceDuration,
+    this.initialServices,
+    this.stylistName,
   }) : super(key: key);
 
   @override
@@ -24,86 +35,112 @@ class BookingPage extends StatefulWidget {
 }
 
 class _BookingPageState extends State<BookingPage> {
-  // Static branches kept for layout consistency; stylists filtered by this value from Firestore
-  final List<String> _branches = const [
-    'Central Branch',
-    'East Branch',
-    'West Branch',
-  ];
+  // Branches used throughout the app
+  final List<String> _branches = const ['Vergara', 'Lawas', 'Lipa', 'Tanauan'];
 
-  String _selectedBranch = 'Central Branch';
+  String _selectedBranch = 'Vergara';
   String? _selectedStylist;
   bool _allowOtherBranchStylist = false;
   DateTime _selectedDate = DateTime.now();
+  bool _timeSelected = false; // require explicit time pick from overlay
   // stylist search + controller for avatar scroller
   final TextEditingController _stylistSearchCtr = TextEditingController();
   String _stylistQuery = '';
   // live stylists pulled from users collection
-  List<Map<String, String>> _stylists = const [];
+  List<Map<String, dynamic>> _stylists = const [];
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _stylistsSub;
 
   // booked services starts with the selected service from Home
   List<Map<String, String>> _bookedServices = [];
 
-  // sample suggested services (could be populated from a service API)
-  final List<Map<String, String>> _suggested = const [
-    {'id': 's2', 'title': 'Shampoo & Blow-dry', 'price': '₱1,200'},
-    {'id': 's5', 'title': 'Beard Trim', 'price': '₱800'},
-    {'id': 's7', 'title': 'Nail Care', 'price': '₱2,000'},
-  ];
+  // removed old static _suggested list; suggestions now come live from Firestore
 
   @override
   void initState() {
     super.initState();
-    _bookedServices.add({
-      'id': widget.serviceId,
-      'title': widget.serviceTitle,
-      'price': widget.servicePrice ?? '',
-      'duration': widget.serviceDuration ?? '',
-    });
+    if (widget.initialServices != null && widget.initialServices!.isNotEmpty) {
+      _bookedServices.addAll(widget.initialServices!);
+    } else if (widget.serviceId != null && widget.serviceTitle != null) {
+      _bookedServices.add({
+        'id': widget.serviceId!,
+        'title': widget.serviceTitle!,
+        'price': widget.servicePrice ?? '',
+        'duration': widget.serviceDuration ?? '',
+      });
+    }
+    // Pre-select stylist if provided
+    if (widget.stylistName != null && widget.stylistName!.isNotEmpty) {
+      _selectedStylist = widget.stylistName;
+    }
     // start listening to stylists
-    _subscribeStylists();
+    _resubscribeStylists();
     // stylist search listener
     _stylistSearchCtr.addListener(_onStylistSearchChanged);
   }
 
-  void _subscribeStylists() {
-    FirebaseFirestore.instance
+  void _resubscribeStylists() {
+    // Cancel any existing subscription
+    _stylistsSub?.cancel();
+    // Build base query
+    Query<Map<String, dynamic>> q = FirebaseFirestore.instance
         .collection('users')
-        .where('role', isEqualTo: 'stylist')
-        .snapshots()
-        .listen((snap) {
-          final list = snap.docs
-              .map((d) {
-                final data = d.data();
-                return {
-                  'name': (data['name'] ?? '').toString(),
-                  'branch': (data['branch'] ?? '').toString(),
-                };
-              })
-              .where((m) => (m['name'] ?? '').isNotEmpty)
-              .toList();
-          if (!mounted) return;
-          setState(() {
-            _stylists = list;
-            // if no selected stylist yet, pick first from current branch if available
-            final options = _stylistsForSelection;
-            if (_selectedStylist == null && options.isNotEmpty) {
-              _selectedStylist = options.first;
-            }
-          });
-        });
+        .where('role', isEqualTo: 'stylist');
+    // If other-branch selection is NOT allowed, filter server-side by branchName for efficiency
+    if (!_allowOtherBranchStylist) {
+      q = q.where('branchName', isEqualTo: _selectedBranch);
+    }
+    _stylistsSub = q.snapshots().listen((snap) {
+      final list = snap.docs
+          .map((d) {
+            final data = d.data();
+            return {
+              'name': (data['name'] ?? '').toString(),
+              'branchName': (data['branchName'] ?? '').toString(),
+              'branch': (data['branch'] ?? '').toString(),
+              'branches': data['branches'] is List
+                  ? (data['branches'] as List).map((e) => e.toString()).toList()
+                  : const <String>[],
+            };
+          })
+          .where((m) => ((m['name'] ?? '') as String).isNotEmpty)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _stylists = list;
+        // Do not auto-pick stylist. If current selection no longer valid, clear it.
+        final options = _stylistsForSelection;
+        if (_selectedStylist != null && !options.contains(_selectedStylist)) {
+          _selectedStylist = null;
+        }
+      });
+    });
   }
 
   void _onStylistSearchChanged() {
     setState(() => _stylistQuery = _stylistSearchCtr.text.trim().toLowerCase());
   }
 
+  String _norm(String v) => v.toLowerCase().trim();
+
+  bool _matchesBranch(Map<String, dynamic> m) {
+    if (_allowOtherBranchStylist) return true;
+    final sel = _norm(_selectedBranch);
+    final bn = (m['branchName'] ?? '').toString();
+    if (bn.isNotEmpty && _norm(bn) == sel) return true;
+    final b = (m['branch'] ?? '').toString();
+    if (b.isNotEmpty && _norm(b) == sel) return true;
+    final list = (m['branches'] is List)
+        ? (m['branches'] as List).map((e) => _norm(e.toString()))
+        : const Iterable<String>.empty();
+    return list.contains(sel);
+  }
+
   List<String> get _stylistsForSelection {
-    // build from Firestore stylists list, filter by branch unless allowed from other branches
-    final base = _allowOtherBranchStylist
-        ? _stylists
-        : _stylists.where((m) => (m['branch'] ?? '') == _selectedBranch);
-    final names = base.map((m) => m['name']!.trim()).where((s) => s.isNotEmpty);
+    // build from Firestore stylists list, filter by branch (supports 'branch' or 'branches' array)
+    final base = _stylists.where(_matchesBranch);
+    final names = base
+        .map((m) => (m['name'] ?? '').toString().trim())
+        .where((s) => s.isNotEmpty);
     final filtered = _stylistQuery.isEmpty
         ? names
         : names.where((s) => s.toLowerCase().contains(_stylistQuery));
@@ -116,8 +153,105 @@ class _BookingPageState extends State<BookingPage> {
     }
   }
 
-  Future<void> _confirmBooking() async {
-    final stylist = _selectedStylist ?? 'No stylist';
+  bool get _canConfirm =>
+      _selectedStylist != null && _bookedServices.isNotEmpty && _timeSelected;
+
+  Future<void> _showConfirmDialogAndBook() async {
+    if (!_canConfirm) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a stylist and time.')),
+      );
+      return;
+    }
+
+    final total = _bookedServices.fold<double>(
+      0,
+      (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
+    );
+    final dateStr =
+        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${_selectedDate.hour.toString().padLeft(2, '0')}:${_selectedDate.minute.toString().padLeft(2, '0')}';
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Confirm appointment?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Branch: $_selectedBranch'),
+              Text('Stylist: ${_selectedStylist ?? ''}'),
+              Text('Date: $dateStr'),
+              Text('Time: $timeStr'),
+              const SizedBox(height: 8),
+              Text('Services:', style: Theme.of(context).textTheme.labelLarge),
+              const SizedBox(height: 4),
+              ..._bookedServices.map((s) => Text('- ${s['title']}')),
+              const SizedBox(height: 8),
+              Text('Total: ${PhpCurrency.format(total)}'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Confirm'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
+    final success = await _confirmBooking();
+    if (!success) {
+      // Error already shown inside _confirmBooking
+      return;
+    }
+
+    // After booking, send a local notification (Android-only via existing service)
+    final firstService = _bookedServices.first['title'] ?? 'Appointment';
+    final stylist = _selectedStylist ?? '';
+    final when = '$dateStr $timeStr';
+    final title = 'Appointment confirmed';
+    final body = stylist.isNotEmpty
+        ? 'Thanks for booking $firstService with $stylist on $when'
+        : 'Thanks for booking $firstService on $when';
+    try {
+      await AndroidNotificationService.ensureInitialized();
+      // Immediate notification
+      await AndroidNotificationService.showNow(
+        title: title,
+        body: body,
+        payload: 'route=/appointments',
+      );
+      // Optional: schedule a reminder 30 minutes before
+      await AndroidNotificationService.scheduleAppointmentReminder(
+        appointmentStart: _selectedDate,
+        leadMinutes: 30,
+        serviceName: firstService,
+        stylistName: stylist.isNotEmpty ? stylist : null,
+      );
+    } catch (_) {
+      // Best-effort; ignore notification errors.
+    }
+  }
+
+  Future<bool> _confirmBooking() async {
+    if (!_canConfirm) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a stylist and time.')),
+      );
+      return false;
+    }
+    final stylist = _selectedStylist!;
     final branch = _selectedBranch;
     final auth = FirebaseAuth.instance;
     final user = auth.currentUser;
@@ -168,11 +302,21 @@ class _BookingPageState extends State<BookingPage> {
         if (user != null) 'clientUid': user.uid,
       });
     }
-    await batch.commit();
-    if (!mounted) return;
+    try {
+      await batch.commit();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to save booking: $e')));
+      }
+      return false;
+    }
+    if (!mounted) return true;
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const MyBookingPage()));
+    return true;
   }
 
   int _parseDurationToMinutes(String s) {
@@ -193,8 +337,40 @@ class _BookingPageState extends State<BookingPage> {
     return total;
   }
 
+  String _shortestName(String full) {
+    final cleaned = full.replaceAll(RegExp(r'[\(\)\[\]\.,]'), ' ');
+    final tokens = cleaned
+        .split(RegExp(r'\s+'))
+        .map((t) => t.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) return full.trim();
+    // Pick the shortest token; if tie, keep the first occurrence
+    tokens.sort((a, b) => a.length.compareTo(b.length));
+    return tokens.first;
+  }
+
+  String _initials(String name) {
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return '';
+    final first = parts.first[0].toUpperCase();
+    final second = parts.length > 1 ? parts[1][0].toUpperCase() : '';
+    return (first + second);
+  }
+
+  String _shortDisplayName(String full) {
+    final token = _shortestName(full).toLowerCase();
+    if (token.length <= 8) return token;
+    return token.substring(0, 6) + '..';
+  }
+
   @override
   void dispose() {
+    _stylistsSub?.cancel();
     _stylistSearchCtr.removeListener(_onStylistSearchChanged);
     _stylistSearchCtr.dispose();
     super.dispose();
@@ -205,46 +381,25 @@ class _BookingPageState extends State<BookingPage> {
     // stylistsForBranch variable removed (unused); use _stylistsForSelection directly below.
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Book Service')),
+      appBar: AppBar(
+        title: const Text('Book Service'),
+        actions: [
+          IconButton(
+            tooltip: 'My Bookings',
+            icon: const Icon(Icons.event_note),
+            onPressed: () {
+              Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const MyBookingPage()));
+            },
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              widget.serviceTitle,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 6),
-            if ((widget.servicePrice ?? '').isNotEmpty)
-              Text(
-                'Price: ${widget.servicePrice}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            const SizedBox(height: 12),
-
-            // Branch selection
-            const Text('Select branch'),
-            const SizedBox(height: 6),
-            DropdownButton<String>(
-              value: _selectedBranch,
-              isExpanded: true,
-              items: _branches
-                  .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                  .toList(),
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() {
-                  _selectedBranch = v;
-                  // reset selection; will re-pick first stylist from stream list
-                  final options = _stylistsForSelection;
-                  _selectedStylist = options.isNotEmpty ? options.first : null;
-                  _stylistSearchCtr.clear();
-                });
-              },
-            ),
-            const SizedBox(height: 12),
-
             // Stylist selection + allow stylist from other branch
             Row(
               children: [
@@ -253,10 +408,10 @@ class _BookingPageState extends State<BookingPage> {
                   value: _allowOtherBranchStylist,
                   onChanged: (v) => setState(() {
                     _allowOtherBranchStylist = v ?? false;
-                    // reset search and selection to first available
+                    // reset search and clear selection; user must pick manually
                     _stylistSearchCtr.clear();
-                    final list = _stylistsForSelection;
-                    _selectedStylist = list.isNotEmpty ? list.first : null;
+                    _selectedStylist = null;
+                    _resubscribeStylists();
                   }),
                 ),
                 const Text('Select from other branch'),
@@ -264,29 +419,69 @@ class _BookingPageState extends State<BookingPage> {
             ),
             const SizedBox(height: 8),
 
-            // Search + avatar scroller for stylists
-            TextField(
-              controller: _stylistSearchCtr,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
-                hintText: 'Search stylist...',
-                suffixIcon: _stylistQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () => _stylistSearchCtr.clear(),
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+            // Branch selection + stylist search aligned horizontally (under 'Choose stylist')
+            Row(
+              children: [
+                Expanded(
+                  flex: 1,
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedBranch,
+                    items: _branches
+                        .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() {
+                        _selectedBranch = v;
+                        // Clear selection; user must pick stylist manually for new branch
+                        _selectedStylist = null;
+                        _stylistSearchCtr.clear();
+                        _resubscribeStylists();
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: 'Branch',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 12,
+                      ),
+                    ),
+                  ),
                 ),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  vertical: 10,
-                  horizontal: 12,
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _stylistSearchCtr,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search),
+                      hintText: 'Search stylist...',
+                      suffixIcon: _stylistQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () => _stylistSearchCtr.clear(),
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 12,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+
+            // Stylists scroller (profile frame with initials + short name below)
             SizedBox(
               height: 120,
               child: _stylistsForSelection.isEmpty
@@ -299,13 +494,8 @@ class _BookingPageState extends State<BookingPage> {
                       itemBuilder: (ctx, i) {
                         final s = _stylistsForSelection[i];
                         final isSelected = s == _selectedStylist;
-                        final initials = s
-                            .split(' ')
-                            .where((p) => p.isNotEmpty)
-                            .map((p) => p[0])
-                            .take(2)
-                            .join()
-                            .toUpperCase();
+                        final short = _shortDisplayName(s);
+                        final initials = _initials(s);
                         final color = Colors
                             .primaries[s.hashCode % Colors.primaries.length];
                         return GestureDetector(
@@ -313,18 +503,18 @@ class _BookingPageState extends State<BookingPage> {
                           child: Column(
                             children: [
                               AnimatedContainer(
-                                duration: const Duration(milliseconds: 180),
-                                padding: EdgeInsets.all(isSelected ? 3 : 0),
+                                duration: const Duration(milliseconds: 160),
+                                padding: EdgeInsets.all(isSelected ? 3 : 1),
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  border: isSelected
-                                      ? Border.all(
-                                          color: Theme.of(
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Theme.of(
                                             context,
-                                          ).colorScheme.primary,
-                                          width: 3,
-                                        )
-                                      : null,
+                                          ).colorScheme.outlineVariant,
+                                    width: isSelected ? 2 : 1,
+                                  ),
                                 ),
                                 child: CircleAvatar(
                                   radius: 36,
@@ -342,18 +532,20 @@ class _BookingPageState extends State<BookingPage> {
                               SizedBox(
                                 width: 80,
                                 child: Text(
-                                  s,
+                                  short,
                                   textAlign: TextAlign.center,
                                   overflow: TextOverflow.ellipsis,
-                                  maxLines: 2,
-                                  style: isSelected
-                                      ? TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Theme.of(
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontWeight: isSelected
+                                        ? FontWeight.w700
+                                        : null,
+                                    color: isSelected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Theme.of(
                                             context,
-                                          ).colorScheme.primary,
-                                        )
-                                      : null,
+                                          ).colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
                             ],
@@ -364,9 +556,11 @@ class _BookingPageState extends State<BookingPage> {
             ),
             const SizedBox(height: 18),
 
-            // Booked services list
+            // Booked services list with pluralization
             Text(
-              'Services to book',
+              _bookedServices.length == 1
+                  ? 'Booked Service'
+                  : 'Booked Services',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
@@ -378,10 +572,34 @@ class _BookingPageState extends State<BookingPage> {
                     child: Text((s['title'] ?? '').substring(0, 1)),
                   ),
                   title: Text(s['title'] ?? ''),
-                  trailing: Text(s['price'] ?? ''),
+                  trailing: Text(PhpCurrency.formatFromString(s['price'])),
                 );
               }).toList(),
             ),
+
+            // Total for booked services
+            if (_bookedServices.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(
+                    'Total: ',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    PhpCurrency.format(
+                      _bookedServices.fold<double>(
+                        0,
+                        (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
+                      ),
+                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ],
 
             const SizedBox(height: 12),
             Text(
@@ -414,9 +632,14 @@ class _BookingPageState extends State<BookingPage> {
                     itemBuilder: (ctx, i) {
                       final data = docs[i].data();
                       final id = docs[i].id;
-                      final title = (data['title'] ?? 'Service').toString();
-                      final price = (data['price'] ?? '').toString();
-                      final duration = (data['duration'] ?? '').toString();
+                      final title = (data['title'] ?? data['name'] ?? 'Service')
+                          .toString();
+                      final price = data['price'] != null
+                          ? data['price'].toString()
+                          : '';
+                      final duration =
+                          (data['duration'] ?? data['durationMinutes'] ?? '')
+                              .toString();
                       final svc = {
                         'id': id,
                         'title': title,
@@ -436,7 +659,7 @@ class _BookingPageState extends State<BookingPage> {
                                 ),
                               ),
                               const SizedBox(height: 6),
-                              Text(price),
+                              Text(PhpCurrency.formatFromString(price)),
                               const SizedBox(height: 6),
                               ElevatedButton(
                                 onPressed: () => _addSuggested(svc),
@@ -475,13 +698,15 @@ class _BookingPageState extends State<BookingPage> {
                     d,
                     stylistName: _selectedStylist,
                     branch: _selectedBranch,
+                    requiredDurationMinutes: _totalBookedDurationMinutes(),
                   ).then((chosen) {
                     setState(() {
                       if (chosen != null) {
                         _selectedDate = chosen;
+                        _timeSelected = true;
                       } else {
-                        // user dismissed: keep date but default to 9AM
-                        _selectedDate = DateTime(d.year, d.month, d.day, 9);
+                        // user dismissed: require explicit selection
+                        _timeSelected = false;
                       }
                     });
                   });
@@ -492,7 +717,7 @@ class _BookingPageState extends State<BookingPage> {
             const SizedBox(height: 20),
             Center(
               child: ElevatedButton.icon(
-                onPressed: _confirmBooking,
+                onPressed: _canConfirm ? _showConfirmDialogAndBook : null,
                 icon: const Icon(Icons.check),
                 label: const Text('Confirm Booking'),
               ),
@@ -502,5 +727,28 @@ class _BookingPageState extends State<BookingPage> {
         ),
       ),
     );
+  }
+
+  int _totalBookedDurationMinutes() {
+    int total = 0;
+    for (final s in _bookedServices) {
+      final raw = (s['duration'] ?? '').trim();
+      int add = 0;
+      if (raw.isEmpty) {
+        add = 60;
+      } else {
+        // if it's a plain number in minutes
+        final asInt = int.tryParse(raw);
+        if (asInt != null) {
+          add = asInt;
+        } else {
+          add = _parseDurationToMinutes(raw);
+        }
+      }
+      if (add <= 0) add = 60;
+      total += add;
+    }
+    // minimum 15, maximum 12 hours safety
+    return total.clamp(15, 12 * 60);
   }
 }

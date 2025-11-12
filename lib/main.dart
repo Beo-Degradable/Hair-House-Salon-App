@@ -39,6 +39,16 @@ class MyApp extends StatelessWidget {
     final darkGrey = const Color(0xFF1E1E1E);
     final darkGold = const Color(0xFFB8860B);
 
+    // Precache the logo once at app start (first build of root widget) to avoid missing frame
+    // This is safe; subsequent calls are cached. Helps confirm asset availability early.
+    precacheImage(
+      const AssetImage('assets/LogoH.png'),
+      context,
+      onError: (error, stack) {
+        debugPrint('LogoH.png failed to precache: $error');
+      },
+    );
+
     return MaterialApp(
       title: 'Hair House Salon',
       theme: ThemeData.dark().copyWith(

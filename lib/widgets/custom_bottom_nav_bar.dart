@@ -105,11 +105,13 @@ class _IconPair {
 class CustomBottomNavScaffold extends StatefulWidget {
   final List<Widget> pages;
   final int initialIndex;
+  final void Function(int, {String? highlight})? onTabSwitch;
 
   CustomBottomNavScaffold({
     super.key,
     required this.pages,
     this.initialIndex = 0,
+    this.onTabSwitch,
   }) : assert(pages.length == 4, 'Expected exactly 4 pages');
 
   @override
@@ -145,6 +147,7 @@ class _CustomBottomNavScaffoldState extends State<CustomBottomNavScaffold> {
           setState(() => _index = i);
           final prefs = await SharedPreferences.getInstance();
           await prefs.setInt('last_nav_index', i);
+          if (widget.onTabSwitch != null) widget.onTabSwitch!(i);
         },
       ),
     );

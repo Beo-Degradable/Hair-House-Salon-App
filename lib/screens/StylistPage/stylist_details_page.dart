@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../AppointmentPage/booking_page.dart';
 
 class StylistDetailsPage extends StatelessWidget {
   final Map<String, String>?
@@ -15,20 +16,83 @@ class StylistDetailsPage extends StatelessWidget {
         ? FirebaseFirestore.instance.collection('users').doc(userId).snapshots()
         : null;
 
-    Widget buildContent(String name, String exp, String specialization) {
+    Widget buildContent(
+      String name,
+      String exp,
+      String specialization,
+      String email,
+      String branch,
+    ) {
       return Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            // Profile frame
+            const CircleAvatar(radius: 60, child: Icon(Icons.person, size: 60)),
+            const SizedBox(height: 16),
+            // Name
             Text(name, style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 8),
-            if (exp.isNotEmpty) Text('Experience: $exp'),
-            if (specialization.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text('Specialization: $specialization'),
+            // Email
+            if (email.isNotEmpty)
+              Text(email, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 8),
+            // Experience
+            if (exp.isNotEmpty)
+              Text(
+                'Experience: $exp years',
+                style: Theme.of(context).textTheme.bodyMedium,
               ),
+            const SizedBox(height: 8),
+            // Branch
+            if (branch.isNotEmpty)
+              Text(
+                'Branch: $branch',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            const SizedBox(height: 16),
+            // Divider
+            const Divider(),
+            const SizedBox(height: 16),
+            // Specialization
+            if (specialization.isNotEmpty)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Specialized Services:',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    specialization,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            const Spacer(),
+            // Book Now button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => BookingPage(stylistName: name),
+                    ),
+                  );
+                },
+                child: const Text('Book Now'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  textStyle: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       );
@@ -43,9 +107,11 @@ class StylistDetailsPage extends StatelessWidget {
       final specialization = stylist != null
           ? (stylist!['specialization'] ?? '')
           : '';
+      final email = stylist != null ? (stylist!['email'] ?? '') : '';
+      final branch = stylist != null ? (stylist!['branch'] ?? '') : '';
       return Scaffold(
         appBar: AppBar(title: Text(name)),
-        body: buildContent(name, exp, specialization),
+        body: buildContent(name, exp, specialization, email, branch),
       );
     }
 
@@ -60,12 +126,14 @@ class StylistDetailsPage extends StatelessWidget {
         final specialization =
             (data['stylist_specialization'] ?? stylist?['specialization'] ?? '')
                 .toString();
+        final email = (data['email'] ?? stylist?['email'] ?? '').toString();
+        final branch = (data['branch'] ?? stylist?['branch'] ?? '').toString();
 
         return Scaffold(
           appBar: AppBar(title: Text(name)),
           body: snap.connectionState == ConnectionState.waiting
               ? const Center(child: CircularProgressIndicator())
-              : buildContent(name, exp, specialization),
+              : buildContent(name, exp, specialization, email, branch),
         );
       },
     );
