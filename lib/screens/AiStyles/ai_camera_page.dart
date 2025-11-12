@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 
-class AiStylesPage extends StatefulWidget {
-  const AiStylesPage({super.key});
+class AiCameraPage extends StatefulWidget {
+  const AiCameraPage({super.key});
 
   @override
-  State<AiStylesPage> createState() => _AiStylesPageState();
+  State<AiCameraPage> createState() => _AiCameraPageState();
 }
 
-class _AiStylesPageState extends State<AiStylesPage> {
+class _AiCameraPageState extends State<AiCameraPage> {
   CameraController? _controller;
   Future<void>? _initializeControllerFuture;
   List<CameraDescription>? _cameras;
@@ -39,7 +39,7 @@ class _AiStylesPageState extends State<AiStylesPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Styles')),
+      appBar: AppBar(title: const Text('AI Camera')),
       body: _controller == null
           ? const Center(child: CircularProgressIndicator())
           : FutureBuilder<void>(

@@ -49,9 +49,7 @@ dependencies:
   # Local notifications for Android appointment reminders (no UI changes)
   flutter_local_notifications: ^17.2.1
   timezone: ^0.9.3
-  # firebase_analytics temporarily removed due to platform interface version conflict with firebase_core ^3.15.2
-  # If you later need more:
-  # firebase_crashlytics, firebase_remote_config, firebase_in_app_messaging, etc.
+  google_mlkit_face_detection: ^0.10.0
 
 dev_dependencies:
   flutter_test:
