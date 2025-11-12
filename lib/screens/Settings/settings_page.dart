@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hxhmobile/theme/theme_controller.dart';
 import 'package:hxhmobile/services/app_state.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,9 +12,6 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeController = ThemeController.instance;
-    final isDark = themeController.mode == ThemeMode.dark;
-
     final user = FirebaseAuth.instance.currentUser;
     final Stream<DocumentSnapshot<Map<String, dynamic>>>? userDocStream =
         user == null
@@ -50,16 +46,7 @@ class SettingsPage extends StatelessWidget {
             builder: (context, _) {
               return ListView(
                 children: [
-                  // Appearance (local only)
-                  SwitchListTile(
-                    title: const Text('Dark Mode'),
-                    subtitle: const Text(
-                      'Toggle between light and dark themes',
-                    ),
-                    value: isDark,
-                    onChanged: (v) => themeController.toggleDark(v),
-                  ),
-
+                  // ...existing code...
                   const Divider(),
                   const ListTile(
                     title: Text('Notifications'),
