@@ -6,8 +6,7 @@ class StylistDetailsPage extends StatelessWidget {
   final Map<String, String>?
   stylist; // legacy/local map (kept for layout stability)
   final String? userId; // optional Firestore user id (stylist profile)
-  const StylistDetailsPage({Key? key, this.stylist, this.userId})
-    : super(key: key);
+  const StylistDetailsPage({super.key, this.stylist, this.userId});
 
   @override
   Widget build(BuildContext context) {
@@ -83,7 +82,6 @@ class StylistDetailsPage extends StatelessWidget {
                     ),
                   );
                 },
-                child: const Text('Book Now'),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   textStyle: const TextStyle(
@@ -91,6 +89,7 @@ class StylistDetailsPage extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                child: const Text('Book Now'),
               ),
             ),
           ],

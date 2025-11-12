@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/bubble_background.dart';
 
 class SplashIntroPage extends StatefulWidget {
-  const SplashIntroPage({Key? key}) : super(key: key);
+  const SplashIntroPage({super.key});
 
   @override
   State<SplashIntroPage> createState() => _SplashIntroPageState();

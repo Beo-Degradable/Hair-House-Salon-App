@@ -107,7 +107,7 @@ class CustomBottomNavScaffold extends StatefulWidget {
   final int initialIndex;
   final void Function(int, {String? highlight})? onTabSwitch;
 
-  CustomBottomNavScaffold({
+  const CustomBottomNavScaffold({
     super.key,
     required this.pages,
     this.initialIndex = 0,

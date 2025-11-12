@@ -457,11 +457,13 @@ class _MyAccountPageState extends State<MyAccountPage> {
                   );
                 } on FirebaseAuthException catch (e) {
                   String msg = 'Failed to update password';
-                  if (e.code == 'wrong-password')
+                  if (e.code == 'wrong-password') {
                     msg = 'Current password incorrect';
+                  }
                   if (e.code == 'weak-password') msg = 'Weak password';
-                  if (e.code == 'requires-recent-login')
+                  if (e.code == 'requires-recent-login') {
                     msg = 'Please re-login and try again';
+                  }
                   ScaffoldMessenger.of(
                     context,
                   ).showSnackBar(SnackBar(content: Text(msg)));
@@ -558,12 +560,15 @@ class _MyAccountPageState extends State<MyAccountPage> {
                   );
                 } on FirebaseAuthException catch (e) {
                   String msg = 'Failed to change email';
-                  if (e.code == 'wrong-password')
+                  if (e.code == 'wrong-password') {
                     msg = 'Current password incorrect';
-                  if (e.code == 'email-already-in-use')
+                  }
+                  if (e.code == 'email-already-in-use') {
                     msg = 'Email already in use';
-                  if (e.code == 'requires-recent-login')
+                  }
+                  if (e.code == 'requires-recent-login') {
                     msg = 'Please re-login and try again';
+                  }
                   ScaffoldMessenger.of(
                     context,
                   ).showSnackBar(SnackBar(content: Text(msg)));

@@ -52,18 +52,14 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Hair House Salon',
       theme: ThemeData.dark().copyWith(
-        useMaterial3: true,
         scaffoldBackgroundColor: black,
         canvasColor: darkGrey,
         cardColor: darkGrey,
-        dialogBackgroundColor: darkGrey,
         colorScheme: ThemeData.dark().colorScheme.copyWith(
           primary: darkGold,
           onPrimary: Colors.white,
-          background: black,
           surface: darkGrey,
           onSurface: Colors.white,
-          onBackground: Colors.white,
         ),
         appBarTheme: AppBarTheme(
           backgroundColor: darkGrey,
@@ -90,6 +86,7 @@ class MyApp extends StatelessWidget {
           hintStyle: const TextStyle(color: Colors.white54),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
         ),
+        dialogTheme: DialogThemeData(backgroundColor: darkGrey),
       ),
       home: showIntro ? const SplashIntroPage() : const LoadingScreen(),
       routes: {

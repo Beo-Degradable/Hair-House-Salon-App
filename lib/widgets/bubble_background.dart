@@ -6,10 +6,10 @@ class BubbleBackground extends StatefulWidget {
   final int maxBubbles;
   final Color bubbleColor;
   const BubbleBackground({
-    Key? key,
+    super.key,
     this.maxBubbles = 20,
     required this.bubbleColor,
-  }) : super(key: key);
+  });
 
   @override
   State<BubbleBackground> createState() => _BubbleBackgroundState();

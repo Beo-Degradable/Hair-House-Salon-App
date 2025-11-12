@@ -15,7 +15,7 @@ import '../Notifications/notifications_page.dart';
 import '../Appointmentpage/booking_page.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  const HomePage({super.key});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -280,7 +280,6 @@ class _HomePageState extends State<HomePage>
                             ),
                           );
                         },
-                        child: const Text('Book Now'),
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           textStyle: const TextStyle(
@@ -290,6 +289,7 @@ class _HomePageState extends State<HomePage>
                             borderRadius: BorderRadius.circular(8),
                           ),
                         ),
+                        child: const Text('Book Now'),
                       ),
                     ),
                   ],
@@ -675,7 +675,7 @@ class _HomePageState extends State<HomePage>
     // Flash Offers filter removed
 
     final authUser = FirebaseAuth.instance.currentUser;
-    Stream<QuerySnapshot<Map<String, dynamic>>> _upcomingApptStream() {
+    Stream<QuerySnapshot<Map<String, dynamic>>> upcomingApptStream() {
       if (authUser == null) return const Stream.empty();
       return FirebaseFirestore.instance
           .collection('appointments')
@@ -968,10 +968,12 @@ class _HomePageState extends State<HomePage>
                                 String dateStr = '';
                                 if (startDate != null && endDate != null) {
                                   DateTime? start, end;
-                                  if (startDate is Timestamp)
+                                  if (startDate is Timestamp) {
                                     start = startDate.toDate();
-                                  if (endDate is Timestamp)
+                                  }
+                                  if (endDate is Timestamp) {
                                     end = endDate.toDate();
+                                  }
                                   if (start != null && end != null) {
                                     dateStr =
                                         'From ${start.month}/${start.day}/${start.year} to ${end.month}/${end.day}/${end.year}';
@@ -1079,7 +1081,7 @@ class _HomePageState extends State<HomePage>
 
                   // Upcoming Appointment Alert (single card)
                   StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _upcomingApptStream(),
+                    stream: upcomingApptStream(),
                     builder: (context, snap) {
                       if (snap.connectionState == ConnectionState.waiting) {
                         return const SizedBox();

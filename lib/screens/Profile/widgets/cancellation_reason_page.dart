@@ -175,7 +175,7 @@ class _CancellationReasonPageState extends State<CancellationReasonPage> {
                             dense: true,
                             controlAffinity: ListTileControlAffinity.leading,
                           );
-                        }).toList(),
+                        }),
                         if (_reasons['Other'] == true)
                           Container(
                             margin: const EdgeInsets.only(top: 8),

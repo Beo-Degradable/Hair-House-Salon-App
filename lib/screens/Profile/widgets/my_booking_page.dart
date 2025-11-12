@@ -55,45 +55,49 @@ class MyBookingPage extends StatelessWidget {
                     if (startField is Timestamp) start = startField.toDate();
                     if (endField is Timestamp) end = endField.toDate();
                     start ??= DateTime.now();
-                    final durationMin = (data['duration'] as int?) ?? 60;
-                    end ??= start.add(Duration(minutes: durationMin));
-                    final title = (data['serviceName'] ?? 'Service').toString();
-                    final priceRaw = data['price'];
+                    end ??= start.add(const Duration(minutes: 60));
                     final branch = (data['branch'] ?? '').toString();
                     final stylist = (data['stylistName'] ?? '').toString();
                     final status = (data['status'] ?? '').toString();
-                    String priceDisplay = '';
-                    if (priceRaw is num) {
-                      priceDisplay = PhpCurrency.format(priceRaw);
-                    } else if (priceRaw != null) {
-                      priceDisplay = PhpCurrency.formatFromString(
-                        priceRaw.toString(),
-                      );
-                    }
                     final isActive =
                         status != 'cancelled' &&
                         status != 'pending_cancel' &&
                         status != 'completed';
 
+                    // New: show all booked services in one card
+                    final services = (data['services'] as List?) ?? [];
+                    final totalDuration = (data['totalDuration'] as int?) ?? 60;
+                    final priceTotal = services.fold<double>(0, (sum, s) {
+                      final price = s['price'];
+                      if (price is num) return sum + price;
+                      if (price is String) {
+                        return sum + (double.tryParse(price) ?? 0);
+                      }
+                      return sum;
+                    });
+
                     return Card(
                       child: ListTile(
                         contentPadding: const EdgeInsets.all(12),
-                        // No leading avatar
                         title: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              title,
+                              'Booked Services',
                               style: Theme.of(
                                 context,
-                              ).textTheme.titleMedium?.copyWith(fontSize: 20),
+                              ).textTheme.titleMedium?.copyWith(fontSize: 22),
                             ),
-                            Text(
-                              priceDisplay,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
+                            ...services.map(
+                              (s) => Text(
+                                '- ${s['title'] ?? 'Service'} (${s['duration'] ?? ''})',
                               ),
                             ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Total Price: ₱${priceTotal.toStringAsFixed(2)}',
+                            ),
+                            Text('Total Duration: $totalDuration min'),
                           ],
                         ),
                         subtitle: Column(
@@ -144,7 +148,9 @@ class MyBookingPage extends StatelessWidget {
                                       builder: (_) => CancellationReasonPage(
                                         appointmentId: d.id,
                                         appointmentStart: start!,
-                                        serviceName: title,
+                                        serviceName: services.isNotEmpty
+                                            ? services[0]['title'] ?? ''
+                                            : '',
                                         currentStatus: status,
                                       ),
                                     ),

@@ -21,14 +21,14 @@ class BookingPage extends StatefulWidget {
   final String? stylistName;
 
   const BookingPage({
-    Key? key,
+    super.key,
     this.serviceId,
     this.serviceTitle,
     this.servicePrice,
     this.serviceDuration,
     this.initialServices,
     this.stylistName,
-  }) : super(key: key);
+  });
 
   @override
   State<BookingPage> createState() => _BookingPageState();
@@ -51,7 +51,7 @@ class _BookingPageState extends State<BookingPage> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _stylistsSub;
 
   // booked services starts with the selected service from Home
-  List<Map<String, String>> _bookedServices = [];
+  final List<Map<String, String>> _bookedServices = [];
 
   // removed old static _suggested list; suggestions now come live from Firestore
 
@@ -273,25 +273,29 @@ class _BookingPageState extends State<BookingPage> {
       }
     } catch (_) {}
 
-    final batch = FirebaseFirestore.instance.batch();
+    // Sum durations and collect all services
+    int totalDuration = 0;
+    final services = <Map<String, String>>[];
     for (final s in _bookedServices) {
       final durStr = s['duration'];
       int durMin = 60;
       if (durStr != null && durStr.isNotEmpty) {
         durMin = _parseDurationToMinutes(durStr);
       }
-      final startTime = _selectedDate;
-      final endTime = startTime.add(Duration(minutes: durMin));
-      final doc = FirebaseFirestore.instance.collection('appointments').doc();
-      batch.set(doc, {
+      totalDuration += durMin;
+      services.add(s);
+    }
+    final startTime = _selectedDate;
+    final endTime = startTime.add(Duration(minutes: totalDuration));
+    final doc = FirebaseFirestore.instance.collection('appointments').doc();
+    try {
+      await doc.set({
         'clientName': clientName.isNotEmpty
             ? clientName
             : (clientEmail.split('@').first),
         'clientEmail': clientEmail,
-        'serviceId': s['id'] ?? '',
-        'serviceName': s['title'] ?? 'Service',
-        'price': s['price'] ?? '',
-        'duration': durMin, // minutes
+        'services': services,
+        'totalDuration': totalDuration, // minutes
         'branch': branch,
         'stylistName': stylist,
         'startTime': Timestamp.fromDate(startTime),
@@ -301,9 +305,16 @@ class _BookingPageState extends State<BookingPage> {
         'updatedAt': FieldValue.serverTimestamp(),
         if (user != null) 'clientUid': user.uid,
       });
-    }
-    try {
-      await batch.commit();
+      // Add notification to Firestore
+      if (user != null) {
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'userUid': user.uid,
+          'type': 'appointment',
+          'title': 'Thank you for booking!',
+          'body': 'Your appointment has been confirmed.',
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -365,7 +376,7 @@ class _BookingPageState extends State<BookingPage> {
   String _shortDisplayName(String full) {
     final token = _shortestName(full).toLowerCase();
     if (token.length <= 8) return token;
-    return token.substring(0, 6) + '..';
+    return '${token.substring(0, 6)}..';
   }
 
   @override
@@ -425,7 +436,7 @@ class _BookingPageState extends State<BookingPage> {
                 Expanded(
                   flex: 1,
                   child: DropdownButtonFormField<String>(
-                    value: _selectedBranch,
+                    initialValue: _selectedBranch,
                     items: _branches
                         .map((b) => DropdownMenuItem(value: b, child: Text(b)))
                         .toList(),
@@ -682,7 +693,7 @@ class _BookingPageState extends State<BookingPage> {
             Container(
               decoration: BoxDecoration(
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 ),
                 borderRadius: BorderRadius.circular(8),
               ),

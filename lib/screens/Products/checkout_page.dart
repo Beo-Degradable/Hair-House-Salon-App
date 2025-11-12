@@ -105,6 +105,16 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    // Add notification to Firestore
+    if (user != null) {
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'userUid': user.uid,
+        'type': 'purchase',
+        'title': 'Thank you for your purchase!',
+        'body': 'Your product order has been received.',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    }
 
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -246,7 +256,7 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                         ],
                       ),
                     );
-                  }).toList(),
+                  }),
                   const SizedBox(height: 8),
                   const Text(
                     'Note: Payment is done in-store. This order reserves items for pickup.',

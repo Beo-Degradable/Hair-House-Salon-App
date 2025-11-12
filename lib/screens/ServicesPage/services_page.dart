@@ -6,7 +6,7 @@ import 'package:hxhmobile/utils/currency.dart';
 
 class ServicesPage extends StatefulWidget {
   final String? highlightedPromoId;
-  const ServicesPage({Key? key, this.highlightedPromoId}) : super(key: key);
+  const ServicesPage({super.key, this.highlightedPromoId});
 
   @override
   State<ServicesPage> createState() => _ServicesPageState();

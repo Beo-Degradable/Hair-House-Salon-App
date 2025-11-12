@@ -6,7 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../widgets/bubble_background.dart';
 
 class LoadingScreen extends StatefulWidget {
-  const LoadingScreen({Key? key}) : super(key: key);
+  const LoadingScreen({super.key});
 
   @override
   State<LoadingScreen> createState() => _LoadingScreenState();
@@ -23,7 +23,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
       precacheImage(const AssetImage('assets/LogoH.png'), context);
     });
     // Decide destination based on stay_logged_in and is_logged_in, and a valid Firebase user
-    Future<String> _decideRoute() async {
+    Future<String> decideRoute() async {
       final prefs = await SharedPreferences.getInstance();
       final stay = prefs.getBool('stay_logged_in') ?? false;
       final isLogged = prefs.getBool('is_logged_in') ?? false;
@@ -34,7 +34,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
 
     _timer = Timer(const Duration(seconds: 5), () async {
       if (!mounted) return;
-      final route = await _decideRoute();
+      final route = await decideRoute();
       if (!mounted) return;
       Navigator.of(context).pushReplacementNamed(route);
     });

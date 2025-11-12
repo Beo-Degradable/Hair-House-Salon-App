@@ -75,42 +75,37 @@ Future<DateTime?> showTimeSlotsDialog(
                   future: query.get(),
                   builder: (context, snapshot) {
                     final docs = snapshot.data?.docs ?? [];
+                    debugPrint(
+                      'Time slots returned ${docs.length} appointment docs',
+                    );
+                    for (final d in docs) {
+                      try {
+                        final data = d.data();
+                        debugPrint(
+                          'appt doc ${d.id} start=${data['startTime']} end=${data['endTime']} totalDuration=${data['totalDuration'] ?? data['duration'] ?? data['durationMinutes']}',
+                        );
+                      } catch (_) {}
+                    }
 
                     bool slotIsBooked(DateTime slotStart) {
                       if (!applyRealtime) return false;
                       for (final d in docs) {
                         final data = d.data();
-                        final st = data['startTime'];
-                        final et = data['endTime'];
                         DateTime? start;
                         DateTime? end;
+                        final st = data['startTime'];
+                        final et = data['endTime'];
                         if (st is Timestamp) start = st.toDate();
                         if (et is Timestamp) end = et.toDate();
-                        // backward compatibility if stored differently
                         start ??= st is DateTime
                             ? st
                             : (st is String ? DateTime.tryParse(st) : null);
                         end ??= et is DateTime
                             ? et
                             : (et is String ? DateTime.tryParse(et) : null);
-                        if (start == null) continue;
-                        if (end == null) {
-                          // derive end from duration fields if available
-                          final dynDur = data['duration'];
-                          final dynDurMin = data['durationMinutes'];
-                          int minutes = 60;
-                          if (dynDur is int) {
-                            minutes = dynDur;
-                          } else if (dynDurMin is int) {
-                            minutes = dynDurMin;
-                          } else if (dynDur is num) {
-                            minutes = dynDur.toInt();
-                          } else if (dynDurMin is num) {
-                            minutes = dynDurMin.toInt();
-                          }
-                          end = start.add(Duration(minutes: minutes));
-                        }
+                        if (start == null || end == null) continue;
                         final slotEnd = slotStart.add(const Duration(hours: 1));
+                        // If any part of the slot overlaps with the appointment, mark as booked
                         if (start.isBefore(slotEnd) && end.isAfter(slotStart)) {
                           return true;
                         }
@@ -122,10 +117,12 @@ Future<DateTime?> showTimeSlotsDialog(
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snapshot.hasError) {
-                      // Graceful fallback: show slots but mark unknown availability
-                      debugPrint('Time slots error: ${snapshot.error}');
+                      // Show detailed error to help diagnose why the query failed.
+                      final err = snapshot.error;
+                      debugPrint('Time slots query error: $err');
                       return Flexible(
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
@@ -136,7 +133,7 @@ Future<DateTime?> showTimeSlotsDialog(
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    'Availability unavailable. Showing raw slots.',
+                                    'Availability unavailable. Showing raw slots.\nError: ${err ?? 'unknown'}',
                                     style: TextStyle(
                                       color: Theme.of(
                                         context,

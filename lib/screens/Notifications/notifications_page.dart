@@ -11,7 +11,7 @@ class NotificationsPage extends StatelessWidget {
     final items = AppState.I.notifications;
     final user = FirebaseAuth.instance.currentUser;
     // Upcoming appointments within lead window
-    Stream<QuerySnapshot<Map<String, dynamic>>> _upcomingAppts() {
+    Stream<QuerySnapshot<Map<String, dynamic>>> upcomingAppts() {
       if (user == null) return const Stream.empty();
       final now = DateTime.now();
       final lead = Duration(hours: AppState.I.reminderLeadHours);
@@ -44,7 +44,7 @@ class NotificationsPage extends StatelessWidget {
         ],
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _upcomingAppts(),
+        stream: upcomingAppts(),
         builder: (context, snapshot) {
           final upcoming = <Map<String, dynamic>>[];
           if (snapshot.hasData) {

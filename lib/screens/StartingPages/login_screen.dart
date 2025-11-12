@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'package:hxhmobile/screens/StartingPages/forgot_password.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,7 +8,7 @@ import '../../services/auth_service.dart';
 import 'forgot_password.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({Key? key}) : super(key: key);
+  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -79,8 +80,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String? _validateName(String? v) {
     if (v == null || v.trim().isEmpty) return 'Required';
-    if (!_nameAllowed.hasMatch(v.trim()))
+    if (!_nameAllowed.hasMatch(v.trim())) {
       return 'Only letters and spaces allowed';
+    }
     return null;
   }
 
@@ -90,15 +92,17 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!s.contains('@')) return 'Must contain @';
     if (!_emailAllowed.hasMatch(s)) return 'Invalid characters in email';
     final parts = s.split('@');
-    if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty)
+    if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty) {
       return 'Invalid email format';
+    }
     return null;
   }
 
   String? _validatePassword(String? v) {
     if (v == null || v.isEmpty) return 'Required';
-    if (!_passwordAllowed.hasMatch(v))
+    if (!_passwordAllowed.hasMatch(v)) {
       return 'Only letters and numbers allowed';
+    }
     if (_isLogin) {
       if (v.length < 6) return 'Password too short';
     } else {
@@ -132,6 +136,18 @@ class _LoginScreenState extends State<LoginScreen> {
           email: email,
           password: password,
         );
+        // Add welcome notification to Firestore
+        final user = AuthService.instance.currentUser;
+        if (user != null) {
+          await FirebaseFirestore.instance.collection('notifications').add({
+            'userUid': user.uid,
+            'type': 'welcome',
+            'title': 'Welcome to Hair House!',
+            'body':
+                'Thank you for creating an account. We are excited to have you!',
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+        }
       }
 
       final profile = await AuthService.instance.fetchProfile();
