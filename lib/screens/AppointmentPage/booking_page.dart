@@ -35,6 +35,21 @@ class BookingPage extends StatefulWidget {
 }
 
 class _BookingPageState extends State<BookingPage> {
+  // Utility to format minutes as hours/minutes string
+  String _formatDurationHM(int minutes) {
+    if (minutes <= 0) return '0 min';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    if (h > 0 && m > 0) {
+      return '${h} hr ${m} min';
+    } else if (h > 0) {
+      return '${h} hr';
+    } else {
+      return '${m} min';
+    }
+  }
+
+  // Utility to format minutes as hours/minutes string
   // Branches used throughout the app
   final List<String> _branches = const ['Vergara', 'Lawas', 'Lipa', 'Tanauan'];
 
@@ -273,20 +288,30 @@ class _BookingPageState extends State<BookingPage> {
       }
     } catch (_) {}
 
-    // Sum durations and collect all services
+    // Schedule each service sequentially and record their start/end times
     int totalDuration = 0;
-    final services = <Map<String, String>>[];
+    final services = <Map<String, dynamic>>[];
+    DateTime serviceStart = _selectedDate;
     for (final s in _bookedServices) {
       final durStr = s['duration'];
       int durMin = 60;
       if (durStr != null && durStr.isNotEmpty) {
         durMin = _parseDurationToMinutes(durStr);
       }
+      final serviceEnd = serviceStart.add(Duration(minutes: durMin));
+      services.add({
+        ...s,
+        'startTime': Timestamp.fromDate(serviceStart),
+        'endTime': Timestamp.fromDate(serviceEnd),
+        'durationMinutes': durMin,
+      });
       totalDuration += durMin;
-      services.add(s);
+      serviceStart = serviceEnd;
     }
-    final startTime = _selectedDate;
-    final endTime = startTime.add(Duration(minutes: totalDuration));
+    final appointmentStart = _selectedDate;
+    final appointmentEnd = appointmentStart.add(
+      Duration(minutes: totalDuration),
+    );
     final doc = FirebaseFirestore.instance.collection('appointments').doc();
     try {
       await doc.set({
@@ -294,12 +319,12 @@ class _BookingPageState extends State<BookingPage> {
             ? clientName
             : (clientEmail.split('@').first),
         'clientEmail': clientEmail,
-        'services': services,
+        'services': services, // each service has its own start/end
         'totalDuration': totalDuration, // minutes
         'branch': branch,
         'stylistName': stylist,
-        'startTime': Timestamp.fromDate(startTime),
-        'endTime': Timestamp.fromDate(endTime),
+        'startTime': Timestamp.fromDate(appointmentStart),
+        'endTime': Timestamp.fromDate(appointmentEnd),
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -307,12 +332,31 @@ class _BookingPageState extends State<BookingPage> {
       });
       // Add notification to Firestore
       if (user != null) {
+        // Confirmation notification
         await FirebaseFirestore.instance.collection('notifications').add({
           'userUid': user.uid,
           'type': 'appointment',
           'title': 'Thank you for booking!',
           'body': 'Your appointment has been confirmed.',
           'timestamp': FieldValue.serverTimestamp(),
+        });
+
+        // Persistent appointment reminder notification
+        final when =
+            '${appointmentStart.month}/${appointmentStart.day} ${TimeOfDay.fromDateTime(appointmentStart).format(context)}';
+        final serviceNames = services
+            .map((s) => s['title'] ?? 'Service')
+            .join(', ');
+        final reminderBody = stylist.isNotEmpty
+            ? '$serviceNames with $stylist at $when'
+            : '$serviceNames at $when';
+        await FirebaseFirestore.instance.collection('notifications').add({
+          'userUid': user.uid,
+          'type': 'reminder',
+          'title': 'Appointment reminder',
+          'body': reminderBody,
+          'timestamp': Timestamp.fromDate(appointmentStart),
+          'read': false,
         });
       }
     } catch (e) {
@@ -331,19 +375,29 @@ class _BookingPageState extends State<BookingPage> {
   }
 
   int _parseDurationToMinutes(String s) {
-    // Accepts formats like '1 hr 30 min', '30 min', '2 hr'
-    final lower = s.toLowerCase();
-    final hrMatch = RegExp(r'(\d+)\s*hr').firstMatch(lower);
-    final minMatch = RegExp(r'(\d+)\s*min').firstMatch(lower);
+    // Accepts formats like '1 hr 30 min', '30 min', '2 hr', '165m', '2h', '2hours', etc.
+    final lower = s.toLowerCase().replaceAll(' ', '');
     int total = 0;
+    // Match 'Xhr', 'Xh', 'Xhours', etc.
+    final hrMatch = RegExp(r'(\d+)\s*(hr|h|hours?)').firstMatch(lower);
     if (hrMatch != null) {
       final h = int.tryParse(hrMatch.group(1) ?? '0') ?? 0;
       total += h * 60;
     }
+    // Match 'Xmin', 'Xm', etc.
+    final minMatch = RegExp(r'(\d+)\s*(min|m)').firstMatch(lower);
     if (minMatch != null) {
       final m = int.tryParse(minMatch.group(1) ?? '0') ?? 0;
       total += m;
     }
+    // If string is just a number (e.g., '90'), treat as minutes
+    if (total == 0) {
+      final justNum = int.tryParse(lower);
+      if (justNum != null && justNum > 0) {
+        total = justNum;
+      }
+    }
+    // If still zero, default to 60
     if (total == 0) return 60;
     return total;
   }
@@ -606,6 +660,21 @@ class _BookingPageState extends State<BookingPage> {
                         (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
                       ),
                     ),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text(
+                    'Total Duration: ',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _formatDurationHM(_totalBookedDurationMinutes()),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ],

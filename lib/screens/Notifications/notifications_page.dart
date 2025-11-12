@@ -8,9 +8,8 @@ class NotificationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final items = AppState.I.notifications;
     final user = FirebaseAuth.instance.currentUser;
-    // Upcoming appointments within lead window
+    // Helper: Upcoming appointments within lead window
     Stream<QuerySnapshot<Map<String, dynamic>>> upcomingAppts() {
       if (user == null) return const Stream.empty();
       final now = DateTime.now();
@@ -25,86 +24,111 @@ class NotificationsPage extends StatelessWidget {
           .snapshots();
     }
 
+    // Helper: User notifications from Firestore
+    Stream<QuerySnapshot<Map<String, dynamic>>> userNotifications() {
+      if (user == null) return const Stream.empty();
+      return FirebaseFirestore.instance
+          .collection('notifications')
+          .where('userUid', isEqualTo: user.uid)
+          .orderBy('timestamp', descending: true)
+          .snapshots();
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Notifications'),
-        actions: [
-          if (items.isNotEmpty)
-            IconButton(
-              tooltip: 'Mark all read',
-              onPressed: () => AppState.I.markAllNotificationsRead(),
-              icon: const Icon(Icons.mark_email_read_outlined),
-            ),
-          if (items.isNotEmpty)
-            IconButton(
-              tooltip: 'Clear all',
-              onPressed: () => AppState.I.clearNotifications(),
-              icon: const Icon(Icons.delete_outline),
-            ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Notifications')),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: upcomingAppts(),
-        builder: (context, snapshot) {
-          final upcoming = <Map<String, dynamic>>[];
-          if (snapshot.hasData) {
-            for (final d in snapshot.data!.docs) {
-              final data = d.data();
-              final start = data['startTime'];
-              DateTime? startDt;
-              if (start is Timestamp) startDt = start.toDate();
-              final service = (data['serviceName'] ?? 'Service').toString();
-              final stylist = (data['stylistName'] ?? '').toString();
-              final when = startDt != null
-                  ? '${startDt.month}/${startDt.day} ${TimeOfDay.fromDateTime(startDt).format(context)}'
-                  : '';
-              upcoming.add({
-                'title': 'Appointment reminder',
-                'body': stylist.isNotEmpty
-                    ? '$service with $stylist at $when'
-                    : '$service at $when',
-                'read': false,
-                'isReminder': true,
-              });
-            }
-          }
-
-          final combined = [
-            // Recent reminders first
-            ...upcoming,
-            // Then user/system notifications (purchases etc.)
-            ...items.reversed,
-          ];
-
-          if (combined.isEmpty) {
-            return const Center(child: Text('No notifications'));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(12),
-            itemCount: combined.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (context, i) {
-              final it = combined[i];
-              final isReminder = it['isReminder'] == true;
-              return Card(
-                child: ListTile(
-                  leading: Icon(
-                    isReminder
-                        ? Icons.event_available
-                        : ((it['read'] as bool?) == true
-                              ? Icons.notifications_none
-                              : Icons.notifications_active_outlined),
-                  ),
-                  title: Text(it['title']?.toString() ?? ''),
-                  subtitle: Text(it['body']?.toString() ?? ''),
-                  onTap: () {
-                    if (!isReminder) {
-                      it['read'] = true;
-                      AppState.I.refresh();
-                    }
-                  },
-                ),
+        stream: userNotifications(),
+        builder: (context, notifSnapshot) {
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: upcomingAppts(),
+            builder: (context, apptSnapshot) {
+              final notifications = <Map<String, dynamic>>[];
+              if (notifSnapshot.hasData) {
+                for (final d in notifSnapshot.data!.docs) {
+                  final data = d.data();
+                  notifications.add({
+                    'id': d.id,
+                    'title': data['title'] ?? '',
+                    'body': data['body'] ?? '',
+                    'type': data['type'] ?? '',
+                    'timestamp': data['timestamp'],
+                    'read': data['read'] ?? false,
+                  });
+                }
+              }
+              final upcoming = <Map<String, dynamic>>[];
+              if (apptSnapshot.hasData) {
+                for (final d in apptSnapshot.data!.docs) {
+                  final data = d.data();
+                  final start = data['startTime'];
+                  DateTime? startDt;
+                  if (start is Timestamp) startDt = start.toDate();
+                  final service = (data['serviceName'] ?? 'Service').toString();
+                  final stylist = (data['stylistName'] ?? '').toString();
+                  final when = startDt != null
+                      ? '${startDt.month}/${startDt.day} ${TimeOfDay.fromDateTime(startDt).format(context)}'
+                      : '';
+                  upcoming.add({
+                    'title': 'Appointment reminder',
+                    'body': stylist.isNotEmpty
+                        ? '$service with $stylist at $when'
+                        : '$service at $when',
+                    'type': 'reminder',
+                  });
+                }
+              }
+              final combined = [...notifications, ...upcoming];
+              if (combined.isEmpty) {
+                return const Center(child: Text('No notifications'));
+              }
+              return ListView.separated(
+                padding: const EdgeInsets.all(12),
+                itemCount: combined.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, i) {
+                  final it = combined[i];
+                  final isReminder = it['type'] == 'reminder';
+                  return Card(
+                    child: ListTile(
+                      leading: Icon(
+                        isReminder
+                            ? Icons.event_available
+                            : Icons.notifications_active_outlined,
+                      ),
+                      title: Text(it['title']?.toString() ?? ''),
+                      subtitle: Text(it['body']?.toString() ?? ''),
+                      trailing: !isReminder
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: Icon(Icons.done),
+                                  tooltip: 'Mark as read',
+                                  onPressed: () async {
+                                    final id = it['id'];
+                                    await FirebaseFirestore.instance
+                                        .collection('notifications')
+                                        .doc(id)
+                                        .update({'read': true});
+                                  },
+                                ),
+                                IconButton(
+                                  icon: Icon(Icons.delete),
+                                  tooltip: 'Delete',
+                                  onPressed: () async {
+                                    final id = it['id'];
+                                    await FirebaseFirestore.instance
+                                        .collection('notifications')
+                                        .doc(id)
+                                        .delete();
+                                  },
+                                ),
+                              ],
+                            )
+                          : null,
+                    ),
+                  );
+                },
               );
             },
           );

@@ -8,6 +8,7 @@ import 'package:hxhmobile/screens/Profile/widgets/my_booking_page.dart';
 import 'package:hxhmobile/screens/Profile/history_page.dart';
 import 'package:hxhmobile/screens/Notifications/notifications_page.dart';
 import 'package:hxhmobile/screens/Settings/settings_page.dart';
+import 'package:hxhmobile/screens/Profile/purchased_products_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -105,6 +106,12 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 const Divider(height: 1),
                 _navItem(
+                  icon: Icons.shopping_bag_outlined,
+                  label: 'Purchased Products',
+                  page: const PurchasedProductsPage(),
+                ),
+                const Divider(height: 1),
+                _navItem(
                   icon: Icons.history,
                   label: 'History',
                   page: const HistoryPage(),
@@ -121,22 +128,35 @@ class _ProfilePageState extends State<ProfilePage> {
                   label: 'Settings',
                   page: const SettingsPage(),
                 ),
-                // Visual separation before logout (user request)
-                const Divider(height: 1, thickness: 1),
-                ListTile(
-                  leading: const Icon(Icons.logout),
-                  title: const Text('Log out'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () async {
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.setBool('is_logged_in', false);
-                    try {
-                      await FirebaseAuth.instance.signOut();
-                    } catch (_) {}
-                    if (context.mounted) {
-                      Navigator.of(context).pushReplacementNamed('/login');
-                    }
-                  },
+                // Divider after settings
+                const Divider(height: 24, thickness: 1),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Log out'),
+                    onPressed: () async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('is_logged_in', false);
+                      try {
+                        await FirebaseAuth.instance.signOut();
+                      } catch (_) {}
+                      if (context.mounted) {
+                        Navigator.of(context).pushReplacementNamed('/login');
+                      }
+                    },
+                  ),
                 ),
               ],
             ),

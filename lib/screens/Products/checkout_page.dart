@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hxhmobile/utils/currency.dart';
@@ -156,6 +157,11 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                     TextFormField(
                       controller: _nameCtr,
                       decoration: const InputDecoration(labelText: 'Name'),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z0-9 ]'),
+                        ),
+                      ],
                       validator: (v) => (v == null || v.trim().isEmpty)
                           ? 'Name required'
                           : null,
@@ -165,6 +171,11 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                       controller: _emailCtr,
                       decoration: const InputDecoration(labelText: 'Email'),
                       keyboardType: TextInputType.emailAddress,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z0-9@._]'),
+                        ),
+                      ],
                       validator: (v) => (v == null || v.trim().isEmpty)
                           ? 'Email required'
                           : null,
@@ -173,6 +184,11 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                     TextFormField(
                       controller: _addressCtr,
                       decoration: const InputDecoration(labelText: 'Address'),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z0-9 ,.-]'),
+                        ),
+                      ],
                       validator: (v) => (v == null || v.trim().isEmpty)
                           ? 'Address required'
                           : null,
@@ -184,6 +200,9 @@ class _ProductsCheckoutPageState extends State<ProductsCheckoutPage> {
                         labelText: 'Phone number',
                       ),
                       keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9+]')),
+                      ],
                       validator: (v) => (v == null || v.trim().isEmpty)
                           ? 'Phone required'
                           : null,

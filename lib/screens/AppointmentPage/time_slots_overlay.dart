@@ -89,6 +89,7 @@ Future<DateTime?> showTimeSlotsDialog(
 
                     bool slotIsBooked(DateTime slotStart) {
                       if (!applyRealtime) return false;
+                      final slotEnd = slotStart.add(const Duration(hours: 1));
                       for (final d in docs) {
                         final data = d.data();
                         DateTime? start;
@@ -103,8 +104,23 @@ Future<DateTime?> showTimeSlotsDialog(
                         end ??= et is DateTime
                             ? et
                             : (et is String ? DateTime.tryParse(et) : null);
+                        // If end is missing, try to infer from duration fields
+                        if (start != null && end == null) {
+                          final dynDur = data['duration'];
+                          final dynDurMin = data['durationMinutes'];
+                          int minutes = 60;
+                          if (dynDur is int) {
+                            minutes = dynDur;
+                          } else if (dynDurMin is int) {
+                            minutes = dynDurMin;
+                          } else if (dynDur is num) {
+                            minutes = dynDur.toInt();
+                          } else if (dynDurMin is num) {
+                            minutes = dynDurMin.toInt();
+                          }
+                          end = start.add(Duration(minutes: minutes));
+                        }
                         if (start == null || end == null) continue;
-                        final slotEnd = slotStart.add(const Duration(hours: 1));
                         // If any part of the slot overlaps with the appointment, mark as booked
                         if (start.isBefore(slotEnd) && end.isAfter(slotStart)) {
                           return true;

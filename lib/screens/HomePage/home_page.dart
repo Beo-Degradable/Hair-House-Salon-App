@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -855,6 +856,12 @@ class _HomePageState extends State<HomePage>
                                         onTap: () => setState(
                                           () => _searchActive = true,
                                         ),
+                                        inputFormatters: [
+                                          // Only allow letters, numbers, and spaces
+                                          FilteringTextInputFormatter.allow(
+                                            RegExp(r'[a-zA-Z0-9 ]'),
+                                          ),
+                                        ],
                                         decoration: const InputDecoration(
                                           hintText:
                                               'Search services and products...',
