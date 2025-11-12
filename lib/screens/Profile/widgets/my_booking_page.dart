@@ -70,21 +70,31 @@ class MyBookingPage extends StatelessWidget {
                         priceRaw.toString(),
                       );
                     }
-                    final hoursUntil = start.difference(DateTime.now()).inHours;
-                    final cancellable =
+                    final isActive =
                         status != 'cancelled' &&
                         status != 'pending_cancel' &&
-                        hoursUntil >= 0;
+                        status != 'completed';
 
                     return Card(
                       child: ListTile(
                         contentPadding: const EdgeInsets.all(12),
-                        leading: CircleAvatar(
-                          child: Text(title.isNotEmpty ? title[0] : '?'),
-                        ),
-                        title: Text(
-                          title,
-                          style: Theme.of(context).textTheme.titleMedium,
+                        // No leading avatar
+                        title: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: Theme.of(
+                                context,
+                              ).textTheme.titleMedium?.copyWith(fontSize: 20),
+                            ),
+                            Text(
+                              priceDisplay,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
                         ),
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -118,14 +128,16 @@ class MyBookingPage extends StatelessWidget {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(
-                              priceDisplay,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            if (cancellable)
-                              TextButton(
+                            if (isActive)
+                              TextButton.icon(
+                                icon: const Icon(
+                                  Icons.cancel,
+                                  color: Colors.redAccent,
+                                ),
+                                label: const Text(
+                                  'Cancel',
+                                  style: TextStyle(color: Colors.redAccent),
+                                ),
                                 onPressed: () {
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
@@ -138,7 +150,6 @@ class MyBookingPage extends StatelessWidget {
                                     ),
                                   );
                                 },
-                                child: const Text('Cancel'),
                               ),
                           ],
                         ),

@@ -397,11 +397,18 @@ class _HomePageState extends State<HomePage>
                                 context,
                               ).pushReplacementNamed('/home');
                             } else if (isService) {
+                              final svc = _localServicesCache.firstWhere(
+                                (s) => s['title'] == t,
+                                orElse: () => {},
+                              );
                               await prefs.setInt(
                                 'last_nav_index',
                                 1,
                               ); // Services tab
-                              await prefs.setString('highlighted_promo_id', t);
+                              await prefs.setString(
+                                'highlighted_promo_id',
+                                svc['id'] ?? t,
+                              );
                               Navigator.of(
                                 context,
                               ).pushReplacementNamed('/home');

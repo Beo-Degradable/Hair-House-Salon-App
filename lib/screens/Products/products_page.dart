@@ -4,6 +4,7 @@ import 'package:hxhmobile/screens/Products/checkout_page.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hxhmobile/utils/currency.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Animation for highlight
 late AnimationController _highlightController;
@@ -35,27 +36,31 @@ class _ProductsPageState extends State<ProductsPage>
     _scrollController = ScrollController();
     _highlightController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 900), // Smooth and quick
     );
     _highlightScale = Tween<double>(
       begin: 1.0,
-      end: 1.15,
-    ).chain(CurveTween(curve: Curves.elasticOut)).animate(_highlightController);
-    if (widget.highlightedTitle != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToHighlighted();
-        setState(() {
-          _activeHighlight = widget.highlightedTitle;
-        });
-        _highlightController.forward();
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) {
-            setState(() {
-              _activeHighlight = null;
-            });
-            _highlightController.reverse();
-          }
-        });
+      end: 1.07,
+    ).chain(CurveTween(curve: Curves.easeInOut)).animate(_highlightController);
+    _loadHighlight();
+  }
+
+  Future<void> _loadHighlight() async {
+    final prefs = await SharedPreferences.getInstance();
+    final highlight = prefs.getString('highlighted_title');
+    if (highlight != null && highlight.isNotEmpty) {
+      setState(() {
+        _activeHighlight = highlight;
+      });
+      _highlightController.forward();
+      Future.delayed(const Duration(seconds: 2), () async {
+        if (mounted) {
+          setState(() {
+            _activeHighlight = null;
+          });
+          _highlightController.reverse();
+          await prefs.remove('highlighted_title');
+        }
       });
     }
   }
