@@ -5,7 +5,7 @@ import 'package:hxhmobile/screens/Profile/profile_header.dart';
 import 'package:hxhmobile/screens/Profile/my_account_page.dart';
 import 'package:hxhmobile/screens/Products/cart_page.dart';
 import 'package:hxhmobile/screens/Profile/widgets/my_booking_page.dart';
-import 'package:hxhmobile/screens/Profile/history_page.dart';
+import 'package:hxhmobile/screens/Profile/points_page.dart';
 import 'package:hxhmobile/screens/Notifications/notifications_page.dart';
 import 'package:hxhmobile/screens/Settings/settings_page.dart';
 import 'package:hxhmobile/screens/Profile/purchased_products_page.dart';
@@ -112,9 +112,9 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 const Divider(height: 1),
                 _navItem(
-                  icon: Icons.history,
-                  label: 'History',
-                  page: const HistoryPage(),
+                  icon: Icons.local_activity,
+                  label: 'Points',
+                  page: const PointsPage(),
                 ),
                 const Divider(height: 1),
                 _navItem(

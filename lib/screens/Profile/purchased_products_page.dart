@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../utils/currency.dart';
+import 'package:hxhmobile/utils/safe_casts.dart';
 
 class PurchasedProductsPage extends StatelessWidget {
   const PurchasedProductsPage({super.key});
@@ -36,7 +37,7 @@ class PurchasedProductsPage extends StatelessWidget {
             separatorBuilder: (_, __) => const SizedBox(height: 8),
             itemBuilder: (context, i) {
               final data = docs[i].data();
-              final items = (data['items'] as List?) ?? [];
+              final items = safeListOfMaps(data['items']);
               final total = data['total'] ?? 0;
               final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
               return Card(

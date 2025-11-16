@@ -4,9 +4,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'time_slots_overlay.dart';
+import 'dart:io';
+import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:hxhmobile/screens/Profile/widgets/my_booking_page.dart';
 import 'package:hxhmobile/utils/currency.dart';
 import 'package:hxhmobile/services/android_notification_service.dart';
+import 'package:flutter/services.dart';
 
 class BookingPage extends StatefulWidget {
   // Legacy single-service parameters (optional now)
@@ -19,6 +24,9 @@ class BookingPage extends StatefulWidget {
   final List<Map<String, String>>? initialServices;
   // Pre-selected stylist name
   final String? stylistName;
+  // New optional flags for pre-filling points usage when navigated from Points page
+  final bool initialUsePoints;
+  final int? initialPointsToUse;
 
   const BookingPage({
     super.key,
@@ -28,7 +36,10 @@ class BookingPage extends StatefulWidget {
     this.serviceDuration,
     this.initialServices,
     this.stylistName,
+    this.initialUsePoints = false,
+    this.initialPointsToUse,
   });
+  
 
   @override
   State<BookingPage> createState() => _BookingPageState();
@@ -68,6 +79,37 @@ class _BookingPageState extends State<BookingPage> {
   // booked services starts with the selected service from Home
   final List<Map<String, String>> _bookedServices = [];
 
+  // Payment UI state
+  String? _selectedPaymentMethod; // 'Maya','GCash','PayPal','Card'
+  bool _paymentConfirmed = false;
+  XFile? _paymentProof;
+
+  // Points
+  int _availablePoints = 0;
+  bool _usePoints = false;
+  final TextEditingController _pointsToUseCtr = TextEditingController();
+
+  // GCash fields
+  final TextEditingController _gcashNameCtr = TextEditingController();
+  final TextEditingController _gcashNumberCtr = TextEditingController();
+
+  // Maya fields (separate from GCash)
+  final TextEditingController _mayaNameCtr = TextEditingController();
+  final TextEditingController _mayaNumberCtr = TextEditingController();
+
+  // PayMaya removed (merged behavior into Maya)
+  
+  // PayPal fields
+  final TextEditingController _paypalNameCtr = TextEditingController();
+  final TextEditingController _paypalEmailCtr = TextEditingController();
+
+  // Card / Bank transfer fields
+  final TextEditingController _acctNameCtr = TextEditingController();
+  final TextEditingController _acctNumberCtr = TextEditingController();
+  final TextEditingController _bankNameCtr = TextEditingController();
+  final TextEditingController _transferAmountCtr = TextEditingController();
+  DateTime? _transferDateTime;
+
   // removed old static _suggested list; suggestions now come live from Firestore
 
   @override
@@ -91,6 +133,41 @@ class _BookingPageState extends State<BookingPage> {
     _resubscribeStylists();
     // stylist search listener
     _stylistSearchCtr.addListener(_onStylistSearchChanged);
+    // payment field listeners to update UI enablement
+    _gcashNameCtr.addListener(() => setState(() {}));
+    _gcashNumberCtr.addListener(() => setState(() {}));
+    _mayaNameCtr.addListener(() => setState(() {}));
+    _mayaNumberCtr.addListener(() => setState(() {}));
+    // PayMaya removed
+    _paypalNameCtr.addListener(() => setState(() {}));
+    _paypalEmailCtr.addListener(() => setState(() {}));
+    _acctNameCtr.addListener(() => setState(() {}));
+    _acctNumberCtr.addListener(() => setState(() {}));
+    _bankNameCtr.addListener(() => setState(() {}));
+    _transferAmountCtr.addListener(() => setState(() {}));
+    _pointsToUseCtr.addListener(() => setState(() {}));
+    _loadAvailablePoints();
+    // Apply any initial points flags passed via constructor
+    if (widget.initialUsePoints) {
+      _usePoints = true;
+      if (widget.initialPointsToUse != null) {
+        _pointsToUseCtr.text = widget.initialPointsToUse.toString();
+      }
+    }
+  }
+
+  Future<void> _loadAvailablePoints() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      final snap = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final pts = snap.data()?['points'];
+      if (mounted) {
+        setState(() {
+          _availablePoints = (pts is int) ? pts : (pts is num ? pts.toInt() : 0);
+        });
+      }
+    } catch (_) {}
   }
 
   void _resubscribeStylists() {
@@ -169,7 +246,10 @@ class _BookingPageState extends State<BookingPage> {
   }
 
   bool get _canConfirm =>
-      _selectedStylist != null && _bookedServices.isNotEmpty && _timeSelected;
+      _selectedStylist != null &&
+      _bookedServices.isNotEmpty &&
+      _timeSelected &&
+      _paymentConfirmed;
 
   Future<void> _showConfirmDialogAndBook() async {
     if (!_canConfirm) {
@@ -183,6 +263,13 @@ class _BookingPageState extends State<BookingPage> {
       0,
       (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
     );
+    final pointsRequested = int.tryParse(_pointsToUseCtr.text.trim()) ?? 0;
+    final maxPointsByPrice = (total / 100).floor();
+    final pointsToApplyDialog = _usePoints
+        ? (pointsRequested > _availablePoints ? _availablePoints : pointsRequested)
+        : 0;
+    final pointsToApply = pointsToApplyDialog > maxPointsByPrice ? maxPointsByPrice : pointsToApplyDialog;
+    final discountedTotal = total - (pointsToApply * 100);
     final dateStr =
         '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
     final timeStr =
@@ -204,9 +291,17 @@ class _BookingPageState extends State<BookingPage> {
               const SizedBox(height: 8),
               Text('Services:', style: Theme.of(context).textTheme.labelLarge),
               const SizedBox(height: 4),
-              ..._bookedServices.map((s) => Text('- ${s['title']}')),
+                        Text('Reservation fee: ${PhpCurrency.format(300)} — please attach a screenshot of the payment for verification.'),
               const SizedBox(height: 8),
-              Text('Total: ${PhpCurrency.format(total)}'),
+              if (pointsToApply > 0) ...[
+                Text('Total: ${PhpCurrency.format(total)}'),
+                const SizedBox(height: 4),
+                Text('Points applied: $pointsToApply (−${PhpCurrency.format(pointsToApply * 100)})'),
+                const SizedBox(height: 4),
+                Text('Payable: ${PhpCurrency.format(discountedTotal)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+              ] else ...[
+                Text('Total: ${PhpCurrency.format(total)}'),
+              ],
             ],
           ),
           actions: [
@@ -313,8 +408,113 @@ class _BookingPageState extends State<BookingPage> {
       Duration(minutes: totalDuration),
     );
     final doc = FirebaseFirestore.instance.collection('appointments').doc();
+    String? proofUrl;
+    // If user attached a proof image, upload it to Firebase Storage under payments/<docId>/
+    if (_paymentProof != null) {
+      try {
+        final ref = FirebaseStorage.instance
+            .ref()
+            .child('payments/${doc.id}/${_paymentProof!.name}');
+        // Read full bytes and upload as base64 string to preserve content and follow requirement
+        final bytes = await _paymentProof!.readAsBytes();
+        final base64Str = base64Encode(bytes);
+        // Use PutStringFormat.base64 and set a generic image content type; storage will infer exact type on download
+        await ref.putString(
+          base64Str,
+          format: PutStringFormat.base64,
+          metadata: SettableMetadata(contentType: 'image/jpeg'),
+        );
+        proofUrl = await ref.getDownloadURL();
+      } catch (e) {
+        // If upload fails, show a message but continue to save appointment without proof URL
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to upload payment proof: $e')),
+          );
+        }
+      }
+    }
+
     try {
-      await doc.set({
+      // Build payment details map explicitly so it's easy to extend and audit
+      Map<String, dynamic>? paymentDetails;
+      num reservationFee = 300;
+      num? amountPaid;
+      String storagePath = '';
+      if (_selectedPaymentMethod != null) {
+        switch (_selectedPaymentMethod) {
+          case 'GCash':
+            paymentDetails = {
+              'name': _gcashNameCtr.text.trim(),
+              'number': _gcashNumberCtr.text.trim(),
+              'amount': reservationFee,
+            };
+            amountPaid = reservationFee;
+            break;
+          case 'Maya':
+            paymentDetails = {
+              'name': _mayaNameCtr.text.trim(),
+              'number': _mayaNumberCtr.text.trim(),
+              'amount': reservationFee,
+            };
+            amountPaid = reservationFee;
+            break;
+          case 'PayPal':
+            paymentDetails = {
+              'name': _paypalNameCtr.text.trim(),
+              'email': _paypalEmailCtr.text.trim(),
+              'amount': reservationFee,
+            };
+            amountPaid = reservationFee;
+            break;
+          case 'Card':
+            paymentDetails = {
+              'accountName': _acctNameCtr.text.trim(),
+              'accountNumber': _acctNumberCtr.text.trim(),
+              'bankName': _bankNameCtr.text.trim(),
+              // Reservation fee is fixed
+              'amount': reservationFee,
+              'transferDate': _transferDateTime != null ? Timestamp.fromDate(_transferDateTime!) : null,
+            };
+            // For card, reservation fee is used as the amountPaid for the reservation
+            amountPaid = reservationFee;
+            break;
+          default:
+            paymentDetails = null;
+            break;
+        }
+      }
+
+      // If proof uploaded, record storage path
+      if (_paymentProof != null) {
+        storagePath = 'payments/${doc.id}/${_paymentProof!.name}';
+      }
+
+      final paymentMap = {
+        'method': _selectedPaymentMethod ?? 'unknown',
+        'confirmed': _paymentConfirmed,
+        'details': paymentDetails,
+        'amountPaid': amountPaid,
+        'proofStoragePath': storagePath.isNotEmpty ? storagePath : null,
+        'proofUrl': proofUrl,
+      };
+
+      // Compute total price of services to determine max usable points
+      final totalPrice = services.fold<double>(0, (sum, s) {
+        final price = s['price'];
+        if (price is num) return sum + price.toDouble();
+        if (price is String) return sum + (double.tryParse(price) ?? 0);
+        return sum;
+      });
+      final pointsRequested = int.tryParse(_pointsToUseCtr.text.trim()) ?? 0;
+      final maxPointsByPrice = (totalPrice / 100).floor();
+      final pointsToUse = pointsRequested < 0
+          ? 0
+          : (pointsRequested > _availablePoints ? _availablePoints : pointsRequested);
+      final pointsToApply = pointsToUse > maxPointsByPrice ? maxPointsByPrice : pointsToUse;
+      final pointsDiscount = pointsToApply * 100;
+
+      final appointmentData = {
         'clientName': clientName.isNotEmpty
             ? clientName
             : (clientEmail.split('@').first),
@@ -329,7 +529,31 @@ class _BookingPageState extends State<BookingPage> {
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         if (user != null) 'clientUid': user.uid,
-      });
+        // Reservation and payment metadata
+        'reservationFee': reservationFee,
+        'reservationPaid': _paymentConfirmed,
+        if (_paymentConfirmed) 'paymentConfirmedAt': FieldValue.serverTimestamp(),
+        'payment': paymentMap,
+        if (pointsToApply > 0) 'pointsUsed': pointsToApply,
+        if (pointsToApply > 0) 'pointsDiscount': pointsDiscount,
+      };
+
+      if (user != null && pointsToApply > 0) {
+        final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final apptRef = doc;
+        await FirebaseFirestore.instance.runTransaction((tx) async {
+          final uSnap = await tx.get(userRef);
+          final current = uSnap.data()?['points'];
+          final currentPts = (current is int) ? current : (current is num ? current.toInt() : 0);
+          if (currentPts < pointsToApply) {
+            throw Exception('Not enough points');
+          }
+          tx.update(userRef, {'points': FieldValue.increment(-pointsToApply)});
+          tx.set(apptRef, appointmentData);
+        });
+      } else {
+        await doc.set(appointmentData);
+      }
       // Add notification to Firestore
       if (user != null) {
         // Confirmation notification
@@ -368,6 +592,8 @@ class _BookingPageState extends State<BookingPage> {
       return false;
     }
     if (!mounted) return true;
+    // Refresh available points after booking (if user exists)
+    await _loadAvailablePoints();
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const MyBookingPage()));
@@ -438,12 +664,102 @@ class _BookingPageState extends State<BookingPage> {
     _stylistsSub?.cancel();
     _stylistSearchCtr.removeListener(_onStylistSearchChanged);
     _stylistSearchCtr.dispose();
+    // dispose payment controllers
+    _gcashNameCtr.dispose();
+    _gcashNumberCtr.dispose();
+    _mayaNameCtr.dispose();
+    _mayaNumberCtr.dispose();
+    // PayMaya removed
+    _paypalNameCtr.dispose();
+    _paypalEmailCtr.dispose();
+    _acctNameCtr.dispose();
+    _acctNumberCtr.dispose();
+    _bankNameCtr.dispose();
+    _transferAmountCtr.dispose();
+    _pointsToUseCtr.dispose();
     super.dispose();
   }
+
+  // Image picker for payment proof
+  Future<void> _pickPaymentProof() async {
+    try {
+      final picker = ImagePicker();
+      // Pick the image at maximum available resolution (do not pass maxWidth/maxHeight)
+      final XFile? picked = await picker.pickImage(source: ImageSource.gallery);
+      if (picked != null) {
+        setState(() {
+          _paymentProof = picked;
+          _paymentConfirmed = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to pick image: $e')));
+      }
+    }
+  }
+
+  Future<void> _pickTransferDateTime() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (d == null) return;
+    final t = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+    if (t == null) return;
+    setState(() {
+      _transferDateTime = DateTime(d.year, d.month, d.day, t.hour, t.minute);
+    });
+  }
+
+  void _confirmPaymentMethod() {
+    // Basic validation already guarded by button enabling; mark as confirmed
+    setState(() {
+      _paymentConfirmed = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Payment method confirmed')));
+  }
+
+  // Validation helpers
+  bool _isValidName(String s) {
+    final v = s.trim();
+    if (v.isEmpty) return false;
+    final re = RegExp(r"^[A-Za-z\s'\-]+$");
+    return re.hasMatch(v);
+  }
+
+  bool _isValidNumber(String s) {
+    final v = s.trim();
+    if (v.isEmpty) return false;
+    final re = RegExp(r'^\d+$');
+    return re.hasMatch(v);
+  }
+
+  bool _isValidEmail(String s) {
+    final v = s.trim();
+    if (v.isEmpty) return false;
+    final re = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+    return re.hasMatch(v);
+  }
+
 
   @override
   Widget build(BuildContext context) {
     // stylistsForBranch variable removed (unused); use _stylistsForSelection directly below.
+    // Compute totals and points application for live UI
+    final double _liveTotalPrice = _bookedServices.fold<double>(
+      0,
+      (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
+    );
+    final int _pointsRequested = int.tryParse(_pointsToUseCtr.text.trim()) ?? 0;
+    final int _maxPointsByPrice = (_liveTotalPrice / 100).floor();
+    final int _pointsRequestedLimited = _usePoints
+        ? (_pointsRequested > _availablePoints ? _availablePoints : _pointsRequested)
+        : 0;
+    final int _pointsToApply = _pointsRequestedLimited > _maxPointsByPrice ? _maxPointsByPrice : _pointsRequestedLimited;
+    final double _discountedTotal = _liveTotalPrice - (_pointsToApply * 100);
 
     return Scaffold(
       appBar: AppBar(
@@ -642,45 +958,7 @@ class _BookingPageState extends State<BookingPage> {
               }).toList(),
             ),
 
-            // Total for booked services
-            if (_bookedServices.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    'Total: ',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    PhpCurrency.format(
-                      _bookedServices.fold<double>(
-                        0,
-                        (sum, s) => sum + (PhpCurrency.parse(s['price']) ?? 0),
-                      ),
-                    ),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    'Total Duration: ',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _formatDurationHM(_totalBookedDurationMinutes()),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            ],
-
+            
             const SizedBox(height: 12),
             Text(
               'Suggested services',
@@ -755,6 +1033,289 @@ class _BookingPageState extends State<BookingPage> {
               ),
             ),
 
+            // Payment method label (outside the decorated container)
+            Text('Payment method', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            // Payment method container
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    children: ['Maya', 'GCash', 'PayPal', 'Card']
+                        .map((m) => ChoiceChip(
+                              label: Text(m),
+                              selected: _selectedPaymentMethod == m,
+                              onSelected: (sel) {
+                                setState(() {
+                                  if (sel) {
+                                    _selectedPaymentMethod = m;
+                                  } else {
+                                    _selectedPaymentMethod = null;
+                                  }
+                                  _paymentConfirmed = false;
+                                  _paymentProof = null;
+                                  _gcashNameCtr.clear();
+                                  _gcashNumberCtr.clear();
+                                  _mayaNameCtr.clear();
+                                  _mayaNumberCtr.clear();
+                                  // PayMaya removed
+                                  _paypalNameCtr.clear();
+                                  _paypalEmailCtr.clear();
+                                  _acctNameCtr.clear();
+                                  _acctNumberCtr.clear();
+                                  _bankNameCtr.clear();
+                                  _transferAmountCtr.clear();
+                                  _transferDateTime = null;
+                                });
+                              },
+                            ))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  if (_selectedPaymentMethod != null) ...[
+                    const SizedBox(height: 8),
+                    if (_selectedPaymentMethod == 'GCash') ...[
+                      TextField(
+                        controller: _gcashNameCtr,
+                        decoration: const InputDecoration(labelText: 'Name'),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z\s'\-]")),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _gcashNumberCtr,
+                        decoration: const InputDecoration(labelText: 'Number'),
+                        keyboardType: TextInputType.phone,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Reservation fee: ${PhpCurrency.format(300)} — please attach a screenshot of the payment for verification.'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: _pickPaymentProof,
+                            icon: const Icon(Icons.attach_file),
+                            label: const Text('Attach proof'),
+                          ),
+                          const SizedBox(width: 12),
+                          if (_paymentProof != null) ...[
+                            SizedBox(
+                              width: 80,
+                              height: 60,
+                              child: Image.file(File(_paymentProof!.path), fit: BoxFit.cover),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Note: Once the reservation is done there is no refund.'),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: (_paymentProof != null && _isValidName(_gcashNameCtr.text) && _isValidNumber(_gcashNumberCtr.text))
+                            ? _confirmPaymentMethod
+                            : null,
+                        child: Text(_paymentConfirmed ? 'Payment Confirmed' : 'Confirm Payment Method'),
+                      ),
+                    ] else if (_selectedPaymentMethod == 'Maya') ...[
+                      TextField(
+                        controller: _mayaNameCtr,
+                        decoration: const InputDecoration(labelText: 'Name'),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z\s'\-]")),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _mayaNumberCtr,
+                        decoration: const InputDecoration(labelText: 'Number'),
+                        keyboardType: TextInputType.phone,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Reservation fee: ${PhpCurrency.format(300)} — please attach a screenshot of the payment for verification.'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: _pickPaymentProof,
+                            icon: const Icon(Icons.attach_file),
+                            label: const Text('Attach proof'),
+                          ),
+                          const SizedBox(width: 12),
+                          if (_paymentProof != null) ...[
+                            SizedBox(
+                              width: 80,
+                              height: 60,
+                              child: Image.file(File(_paymentProof!.path), fit: BoxFit.cover),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Note: Once the reservation is done there is no refund.'),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: (_paymentProof != null && _isValidName(_mayaNameCtr.text) && _isValidNumber(_mayaNumberCtr.text))
+                            ? _confirmPaymentMethod
+                            : null,
+                        child: Text(_paymentConfirmed ? 'Payment Confirmed' : 'Confirm Payment Method'),
+                      ),
+                    ] else if (_selectedPaymentMethod == 'PayPal') ...[
+                      TextField(
+                        controller: _paypalNameCtr,
+                        decoration: const InputDecoration(labelText: 'Name'),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z\s'\-]")),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _paypalEmailCtr,
+                        decoration: const InputDecoration(labelText: 'Email'),
+                        keyboardType: TextInputType.emailAddress,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z0-9@._\-+]") ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Reservation fee: ${PhpCurrency.format(300)} — please attach a screenshot of the payment for verification.'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: _pickPaymentProof,
+                            icon: const Icon(Icons.attach_file),
+                            label: const Text('Attach proof'),
+                          ),
+                          const SizedBox(width: 12),
+                          if (_paymentProof != null) ...[
+                            SizedBox(
+                              width: 80,
+                              height: 60,
+                              child: Image.file(File(_paymentProof!.path), fit: BoxFit.cover),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: (_paymentProof != null && _isValidName(_paypalNameCtr.text) && _isValidEmail(_paypalEmailCtr.text))
+                            ? _confirmPaymentMethod
+                            : null,
+                        child: Text(_paymentConfirmed ? 'Payment Confirmed' : 'Confirm Payment Method'),
+                      ),
+                    ] else if (_selectedPaymentMethod == 'Card') ...[
+                      TextField(
+                        controller: _acctNameCtr,
+                        decoration: const InputDecoration(labelText: 'Account name (or name on account)'),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z\s'\-]")),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _acctNumberCtr,
+                        decoration: const InputDecoration(labelText: 'Account number'),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _bankNameCtr,
+                        decoration: const InputDecoration(labelText: 'Bank name'),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(RegExp(r"[A-Za-z\s'\-]")),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Reservation fee: ${PhpCurrency.format(300)} — please attach a screenshot of the payment for verification.'),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Text(_transferDateTime == null ? 'No transfer date/time' : '${_transferDateTime!.toLocal()}'),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            onPressed: _pickTransferDateTime,
+                            child: const Text('Pick date/time'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: _pickPaymentProof,
+                            icon: const Icon(Icons.attach_file),
+                            label: const Text('Attach proof'),
+                          ),
+                          const SizedBox(width: 12),
+                          if (_paymentProof != null) ...[
+                            SizedBox(
+                              width: 80,
+                              height: 60,
+                              child: Image.file(File(_paymentProof!.path), fit: BoxFit.cover),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text('Note: Once the reservation is done there is no refund.'),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: (_paymentProof != null && _isValidName(_acctNameCtr.text) && _isValidNumber(_acctNumberCtr.text) && _isValidName(_bankNameCtr.text) && _transferDateTime != null)
+                            ? _confirmPaymentMethod
+                            : null,
+                        child: Text(_paymentConfirmed ? 'Payment Confirmed' : 'Confirm Payment Method'),
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 8),
+                      const Text('Fill required fields for the selected payment method, then attach proof and confirm.'),
+                    ]
+                  ],
+                ],
+              ),
+            ),
+
+            // Points usage section (placed below payment method)
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Checkbox(value: _usePoints, onChanged: (v) {
+                  setState(() {
+                    _usePoints = v ?? false;
+                    if (!_usePoints) _pointsToUseCtr.clear();
+                  });
+                }),
+                const SizedBox(width: 6),
+                Expanded(child: Text('Use points (1 point = ₱100). Available: $_availablePoints')),
+              ],
+            ),
+            if (_usePoints) ...[
+              const SizedBox(height: 6),
+              TextField(
+                controller: _pointsToUseCtr,
+                decoration: InputDecoration(
+                  labelText: 'Points to use',
+                  hintText: 'Max ${_availablePoints}',
+                ),
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              ),
+              const SizedBox(height: 8),
+            ],
+
             const SizedBox(height: 16),
             // Calendar
             Text('Select date', style: Theme.of(context).textTheme.titleMedium),
@@ -793,6 +1354,82 @@ class _BookingPageState extends State<BookingPage> {
                 },
               ),
             ),
+
+            // Itemized total and calculation preview (shown under calendar)
+            if (_bookedServices.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Itemized services
+                    ..._bookedServices.map<Widget>((s) {
+                      final title = (s['title'] ?? '').toString();
+                      final price = s['price'] != null ? s['price'].toString() : '';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(child: Text(title)),
+                            Text(PhpCurrency.formatFromString(price)),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                    const Divider(),
+                    // Subtotal / total
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Total', style: Theme.of(context).textTheme.bodyMedium),
+                        Text(PhpCurrency.format(_liveTotalPrice), style: const TextStyle(fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Points applied and payable calculation
+                    if (_pointsToApply > 0) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Points ($_pointsToApply)', style: Theme.of(context).textTheme.bodyMedium),
+                          Text('- ${PhpCurrency.format(_pointsToApply * 100)}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Payable', style: Theme.of(context).textTheme.bodyMedium),
+                          Text(PhpCurrency.format(_discountedTotal), style: const TextStyle(fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Calculation: ${PhpCurrency.format(_liveTotalPrice)} - (${_pointsToApply} × ₱100) = ${PhpCurrency.format(_discountedTotal)}',
+                        textAlign: TextAlign.right,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Total Duration:', style: Theme.of(context).textTheme.bodyMedium),
+                          Text(_formatDurationHM(_totalBookedDurationMinutes()), style: const TextStyle(fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
 
             const SizedBox(height: 20),
             Center(

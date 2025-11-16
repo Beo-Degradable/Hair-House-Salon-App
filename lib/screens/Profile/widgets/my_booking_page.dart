@@ -3,11 +3,19 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'cancellation_reason_page.dart';
 import 'package:hxhmobile/utils/currency.dart';
+import 'package:hxhmobile/utils/safe_casts.dart';
 
 /// Displays the user's booked services from AppState.I.bookings
 /// Each booking shows date/time range, service title, branch, stylist and price.
-class MyBookingPage extends StatelessWidget {
+class MyBookingPage extends StatefulWidget {
   const MyBookingPage({super.key});
+
+  @override
+  State<MyBookingPage> createState() => _MyBookingPageState();
+}
+
+class _MyBookingPageState extends State<MyBookingPage> {
+  final Set<String> _pointsProcessed = {};
 
   @override
   Widget build(BuildContext context) {
@@ -65,7 +73,7 @@ class MyBookingPage extends StatelessWidget {
                         status != 'completed';
 
                     // New: show all booked services in one card
-                    final services = (data['services'] as List?) ?? [];
+                    final services = safeListOfMaps(data['services']);
                     final totalDuration = (data['totalDuration'] as int?) ?? 60;
                     final priceTotal = services.fold<double>(0, (sum, s) {
                       final price = s['price'];
@@ -75,6 +83,41 @@ class MyBookingPage extends StatelessWidget {
                       }
                       return sum;
                     });
+
+                    // Award points if appointment is completed and not yet awarded
+                    if (status == 'completed' && data['pointsAwarded'] != true && user.uid.isNotEmpty) {
+                      final docId = d.id;
+                      // Prevent duplicate processing in this client instance
+                      if (!_pointsProcessed.contains(docId)) {
+                        _pointsProcessed.add(docId);
+                        // Compute points: 1 point per 100 pesos
+                        final int points = (priceTotal / 100).floor();
+                        if (points > 0) {
+                          final usersRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
+                          final apptRef = FirebaseFirestore.instance.collection('appointments').doc(docId);
+                          FirebaseFirestore.instance.runTransaction((tx) async {
+                            final snap = await tx.get(apptRef);
+                            if (snap.exists && (snap.data()?['pointsAwarded'] == true)) return;
+                            // Increment user's points and mark appointment as awarded
+                            tx.update(usersRef, {'points': FieldValue.increment(points)});
+                            tx.update(apptRef, {
+                              'pointsAwarded': true,
+                              'pointsEarned': points,
+                              'pointsAwardedAt': FieldValue.serverTimestamp(),
+                            });
+                          }).catchError((e) {
+                            // Best-effort; log or notify user
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to award points: $e')));
+                            }
+                          });
+                        } else {
+                          // Still mark as processed to avoid repeated checks
+                          final apptRef = FirebaseFirestore.instance.collection('appointments').doc(d.id);
+                          apptRef.set({'pointsAwarded': true, 'pointsEarned': 0}, SetOptions(merge: true));
+                        }
+                      }
+                    }
 
                     return Card(
                       child: ListTile(

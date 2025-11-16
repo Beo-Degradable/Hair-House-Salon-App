@@ -6,7 +6,8 @@ import 'package:hxhmobile/utils/currency.dart';
 
 class ServicesPage extends StatefulWidget {
   final String? highlightedPromoId;
-  const ServicesPage({super.key, this.highlightedPromoId});
+  final bool prefillUsePoints;
+  const ServicesPage({super.key, this.highlightedPromoId, this.prefillUsePoints = false});
 
   @override
   State<ServicesPage> createState() => _ServicesPageState();
@@ -37,6 +38,24 @@ class _ServicesPageState extends State<ServicesPage>
     _loadHighlight();
   }
 
+  @override
+  void dispose() {
+    _highlightController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onCategorySelected(String c) {
+    if (_category == c) return;
+    setState(() {
+      _category = c;
+    });
+  }
+
+  
+
+  
+
   Future<void> _loadHighlight() async {
     final prefs = await SharedPreferences.getInstance();
     final highlight = prefs.getString('highlighted_promo_id');
@@ -57,32 +76,7 @@ class _ServicesPageState extends State<ServicesPage>
     }
   }
 
-  // Live services stream from Firestore `services` collection.
-  // Expected document fields: title, duration, price, image(optional), category(optional)
-  // We map doc.id to 'id' to preserve existing logic (promo highlighting assumes ids like s1..s9).
-  Stream<List<Map<String, dynamic>>> _servicesStream() {
-    return FirebaseFirestore.instance
-        .collection('services')
-        .snapshots()
-        .map(
-          (snap) => snap.docs.map((doc) {
-            final data = doc.data();
-            return {
-              'id': doc.id,
-              // prefer `title` but many docs use `name`
-              'title': (data['title'] ?? data['name'] ?? 'Untitled').toString(),
-              // duration may be stored as a string or minutes int
-              'duration': (data['duration'] ?? data['durationMinutes'] ?? '')
-                  .toString(),
-              // ensure price is a string to avoid cast errors when the field is numeric
-              'price': data['price'] != null ? data['price'].toString() : '',
-              'image': data['image']?.toString() ?? '',
-              // some docs use `type` instead of `category`
-              'category': (data['category'] ?? data['type'] ?? '').toString(),
-            };
-          }).toList(),
-        );
-  }
+  // Note: this file now uses paginated reads (_loadInitialServices/_loadMoreServices)
 
   // Sample promo -> service ids map
   Map<String, List<String>> get _promoMap => {
@@ -116,11 +110,11 @@ class _ServicesPageState extends State<ServicesPage>
                   const cats = ['All', 'Hair', 'Skin', 'Nails'];
                   final c = cats[i];
                   final sel = _category == c;
-                  return ChoiceChip(
-                    label: Text(c),
-                    selected: sel,
-                    onSelected: (_) => setState(() => _category = c),
-                  );
+                    return ChoiceChip(
+                      label: Text(c),
+                      selected: sel,
+                      onSelected: (_) => _onCategorySelected(c),
+                    );
                 },
                 separatorBuilder: (_, __) => const SizedBox(width: 8),
                 itemCount: const ['All', 'Hair', 'Skin', 'Nails'].length,
@@ -129,29 +123,31 @@ class _ServicesPageState extends State<ServicesPage>
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: StreamBuilder<List<Map<String, dynamic>>>(
-              stream: _servicesStream(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('services')
+                  // limit to reasonable number to avoid huge reads; change as needed
+                  .limit(200)
+                  .snapshots(),
+              builder: (context, snap) {
+                if (snap.hasError) {
+                  return Center(child: Text('Error loading services: ${snap.error}'));
+                }
+                if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Text('Error loading services: ${snapshot.error}'),
-                  );
-                }
-                final services = snapshot.data ?? [];
-                if (services.isEmpty) {
-                  return const Center(child: Text('No services available'));
-                }
-
-                final width = MediaQuery.of(context).size.width;
-                final crossAxisCount = width >= 900
-                    ? 4
-                    : width >= 600
-                    ? 3
-                    : 2;
-                final cs = Theme.of(context).colorScheme;
+                final docs = snap.data?.docs ?? [];
+                final services = docs.map((doc) {
+                  final data = doc.data();
+                  return {
+                    'id': doc.id,
+                    'title': (data['title'] ?? data['name'] ?? 'Untitled').toString(),
+                    'duration': (data['duration'] ?? data['durationMinutes'] ?? '').toString(),
+                    'price': data['price'] != null ? data['price'].toString() : '',
+                    'image': data['image']?.toString() ?? '',
+                    'category': (data['category'] ?? data['type'] ?? '').toString(),
+                  };
+                }).toList();
 
                 final filtered = services.where((s) {
                   if (_category == 'All') return true;
@@ -171,7 +167,14 @@ class _ServicesPageState extends State<ServicesPage>
                   return true;
                 }).toList();
 
+                if (filtered.isEmpty) return const Center(child: Text('No services available'));
+
+                final width = MediaQuery.of(context).size.width;
+                final crossAxisCount = width >= 900 ? 4 : width >= 600 ? 3 : 2;
+                final cs = Theme.of(context).colorScheme;
+
                 return GridView.builder(
+                  controller: _scrollController,
                   padding: const EdgeInsets.all(12),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: crossAxisCount,
@@ -184,8 +187,8 @@ class _ServicesPageState extends State<ServicesPage>
                     final svc = filtered[i];
                     final id = svc['id'] as String;
                     final title = svc['title'] as String;
-                    final duration = (svc['duration'] ?? '') as String;
-                    final price = (svc['price'] ?? '') as String;
+                    final duration = (svc['duration'] ?? '').toString();
+                    final price = (svc['price'] ?? '').toString();
                     final promoted = promotedIds.contains(id);
                     return InkWell(
                       onTap: () {
@@ -196,6 +199,7 @@ class _ServicesPageState extends State<ServicesPage>
                               serviceTitle: title,
                               servicePrice: price,
                               serviceDuration: duration,
+                              initialUsePoints: widget.prefillUsePoints,
                             ),
                           ),
                         );
@@ -205,18 +209,13 @@ class _ServicesPageState extends State<ServicesPage>
                         animation: _highlightController,
                         builder: (context, child) {
                           final isHighlighted = _activeHighlight == svc['id'];
-                          final scale = isHighlighted
-                              ? _highlightScale.value
-                              : 1.0;
+                          final scale = isHighlighted ? _highlightScale.value : 1.0;
                           return Transform.scale(
                             scale: scale,
                             child: Container(
                               decoration: BoxDecoration(
                                 border: isHighlighted
-                                    ? Border.all(
-                                        color: Color(0xFFB8860B),
-                                        width: 3,
-                                      )
+                                    ? Border.all(color: const Color(0xFFB8860B), width: 3)
                                     : null,
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -224,38 +223,26 @@ class _ServicesPageState extends State<ServicesPage>
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
                                   side: (promoted && (_activeHighlight == id))
-                                      ? BorderSide(
-                                          color: Colors.amber,
-                                          width: 3,
-                                        )
-                                      : BorderSide(
-                                          color: Colors.transparent,
-                                          width: 0,
-                                        ),
+                                      ? const BorderSide(color: Colors.amber, width: 3)
+                                      : const BorderSide(color: Colors.transparent, width: 0),
                                 ),
                                 elevation: 3,
-                                color: promoted
-                                    ? cs.primary.withAlpha(20)
-                                    : null,
+                                color: promoted ? cs.primary.withAlpha(20) : null,
                                 child: Padding(
                                   padding: const EdgeInsets.all(10.0),
                                   child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(10),
                                         child: Container(
                                           height: 80,
                                           width: double.infinity,
-                                          color: cs.surfaceContainerHighest
-                                              .withValues(alpha: 0.2),
+                                          color: cs.surfaceContainerHighest.withValues(alpha: 0.2),
                                           alignment: Alignment.center,
                                           child: Icon(
                                             Icons.image,
-                                            color: cs.onSurface.withValues(
-                                              alpha: 0.5,
-                                            ),
+                                            color: cs.onSurface.withValues(alpha: 0.5),
                                           ),
                                         ),
                                       ),
@@ -264,9 +251,7 @@ class _ServicesPageState extends State<ServicesPage>
                                         title,
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.titleSmall,
+                                        style: Theme.of(context).textTheme.titleSmall,
                                       ),
                                       const SizedBox(height: 2),
                                       Row(
@@ -274,17 +259,13 @@ class _ServicesPageState extends State<ServicesPage>
                                           Icon(
                                             Icons.access_time,
                                             size: 14,
-                                            color: cs.onSurface.withValues(
-                                              alpha: 0.7,
-                                            ),
+                                            color: cs.onSurface.withValues(alpha: 0.7),
                                           ),
                                           const SizedBox(width: 6),
                                           Expanded(
                                             child: Text(
                                               duration,
-                                              style: Theme.of(
-                                                context,
-                                              ).textTheme.bodySmall,
+                                              style: Theme.of(context).textTheme.bodySmall,
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
@@ -293,9 +274,7 @@ class _ServicesPageState extends State<ServicesPage>
                                       const Spacer(),
                                       Text(
                                         PhpCurrency.formatFromString(price),
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                                        style: const TextStyle(fontWeight: FontWeight.bold),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ],

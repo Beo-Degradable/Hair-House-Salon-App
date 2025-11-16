@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:hxhmobile/screens/Profile/history_page.dart';
+import 'package:hxhmobile/screens/Profile/points_page.dart';
 import 'package:hxhmobile/services/auth_service.dart';
 
 class MyAccountPage extends StatefulWidget {
@@ -347,13 +347,13 @@ class _MyAccountPageState extends State<MyAccountPage> {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.history),
+              const Icon(Icons.local_activity),
               const SizedBox(width: 8),
-              Expanded(child: const Text('History items')),
+              Expanded(child: const Text('Points')),
               TextButton(
                 onPressed: () {
                   Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const HistoryPage()),
+                    MaterialPageRoute(builder: (_) => const PointsPage()),
                   );
                 },
                 child: const Text('View'),

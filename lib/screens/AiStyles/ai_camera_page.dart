@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:hxhmobile/utils/safe_casts.dart';
 
 class AiCameraPage extends StatefulWidget {
   const AiCameraPage({super.key});
@@ -203,10 +204,10 @@ class _AiCameraPageState extends State<AiCameraPage> {
     final cacheKey = 'recommendations_$faceShape';
     // Try to load from cache first
     final cached = prefs.getString(cacheKey);
-    if (cached != null) {
-      final List<dynamic> cachedList = json.decode(cached);
+      if (cached != null) {
+      final decoded = json.decode(cached);
       setState(() {
-        _recommendations = List<Map<String, dynamic>>.from(cachedList);
+        _recommendations = safeListOfMaps(decoded);
         _loadingRecommendations = false;
       });
       // Optionally, fetch in background to update cache
@@ -228,11 +229,11 @@ class _AiCameraPageState extends State<AiCameraPage> {
           .where('tags', arrayContains: faceShape)
           .get();
       final docs = querySnapshot.docs;
-      if (docs.isNotEmpty) {
+        if (docs.isNotEmpty) {
         final recs = docs.map((doc) => doc.data()).toList();
         await prefs.setString(cacheKey, json.encode(recs));
         setState(() {
-          _recommendations = List<Map<String, dynamic>>.from(recs);
+          _recommendations = safeListOfMaps(recs);
         });
       } else {
         await prefs.setString(cacheKey, json.encode([]));

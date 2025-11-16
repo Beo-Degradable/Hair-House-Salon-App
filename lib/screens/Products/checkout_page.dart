@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hxhmobile/utils/currency.dart';
 
 class ProductsCheckoutPage extends StatefulWidget {
-  final List<Map<String, String>> items; // expects id, title, price, image?
+  final List<Map<String, dynamic>> items; // expects id, title, price, image?
   const ProductsCheckoutPage({super.key, required this.items});
 
   @override
