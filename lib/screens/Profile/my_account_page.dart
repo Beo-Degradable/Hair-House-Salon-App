@@ -124,89 +124,11 @@ class _MyAccountPageState extends State<MyAccountPage> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _saveAvatarBase64(String? b64) async {
-    final prefs = await SharedPreferences.getInstance();
-    final user = FirebaseAuth.instance.currentUser;
-    if (b64 == null) {
-      await prefs.remove('avatar_b64');
-    } else {
-      await prefs.setString('avatar_b64', b64);
-    }
-    setState(() => _avatarBase64 = b64);
-    // Persist to Firestore if signed in
-    if (user != null) {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'avatarB64': b64 ?? '',
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-  }
-
   // For this version, allow user to paste a direct image URL or a base64 string.
   // On mobile, integrating camera/gallery requires extra setup; this keeps it simple
   // yet functional.
-  Future<void> _changeAvatarDialog() async {
-    final urlCtr = TextEditingController();
-    final b64Ctr = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Change avatar'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text('Paste image URL (jpg/png):'),
-              TextField(
-                controller: urlCtr,
-                decoration: const InputDecoration(hintText: 'https://...'),
-              ),
-              const SizedBox(height: 8),
-              const Text('or paste Base64 data (data:image/...;base64,...)'),
-              TextField(controller: b64Ctr, maxLines: 3),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () async {
-              // Prefer base64 if provided; fall back to fetching URL bytes (skipped for now).
-              final s = b64Ctr.text.trim();
-              if (s.isNotEmpty) {
-                await _saveAvatarBase64(_stripDataPrefix(s));
-              } else if (urlCtr.text.trim().isNotEmpty) {
-                // Store URL string base64-encoded marker to render via NetworkImage.
-                // We prefix with url: so the renderer knows how to load it.
-                final encoded = base64Encode(
-                  utf8.encode('url:${urlCtr.text.trim()}'),
-                );
-                await _saveAvatarBase64(encoded);
-              }
-              if (mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Save'),
-          ),
-          TextButton(
-            onPressed: () async {
-              await _saveAvatarBase64(null);
-              if (mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
-  }
 
-  String _stripDataPrefix(String s) {
-    final i = s.indexOf(',');
-    return i >= 0 ? s.substring(i + 1) : s;
-  }
+  // Avatar change functionality removed from My Account page.
 
   ImageProvider? _avatarImageProvider() {
     if (_avatarBase64 == null || _avatarBase64!.isEmpty) return null;
@@ -276,11 +198,7 @@ class _MyAccountPageState extends State<MyAccountPage> {
                   ],
                 ),
               ),
-              TextButton.icon(
-                onPressed: _changeAvatarDialog,
-                icon: const Icon(Icons.image_outlined),
-                label: const Text('Change avatar'),
-              ),
+              // Change avatar removed per request
             ],
           ),
         ),
@@ -352,9 +270,9 @@ class _MyAccountPageState extends State<MyAccountPage> {
               Expanded(child: const Text('Points')),
               TextButton(
                 onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const PointsPage()),
-                  );
+                  Navigator.of(
+                    context,
+                  ).push(MaterialPageRoute(builder: (_) => const PointsPage()));
                 },
                 child: const Text('View'),
               ),

@@ -204,7 +204,7 @@ class _AiCameraPageState extends State<AiCameraPage> {
     final cacheKey = 'recommendations_$faceShape';
     // Try to load from cache first
     final cached = prefs.getString(cacheKey);
-      if (cached != null) {
+    if (cached != null) {
       final decoded = json.decode(cached);
       setState(() {
         _recommendations = safeListOfMaps(decoded);
@@ -229,7 +229,7 @@ class _AiCameraPageState extends State<AiCameraPage> {
           .where('tags', arrayContains: faceShape)
           .get();
       final docs = querySnapshot.docs;
-        if (docs.isNotEmpty) {
+      if (docs.isNotEmpty) {
         final recs = docs.map((doc) => doc.data()).toList();
         await prefs.setString(cacheKey, json.encode(recs));
         setState(() {
