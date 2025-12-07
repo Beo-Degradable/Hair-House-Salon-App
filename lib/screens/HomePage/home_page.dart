@@ -13,7 +13,7 @@ import '../AiStyles/ai_styles_page.dart';
 import '../Products/cart_page.dart';
 import '../Settings/settings_page.dart';
 import '../Notifications/notifications_page.dart';
-import '../Appointmentpage/booking_page.dart';
+import '../AppointmentPage/booking_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
